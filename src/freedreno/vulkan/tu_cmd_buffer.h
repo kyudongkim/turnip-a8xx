@@ -706,6 +706,10 @@ struct tu_cmd_buffer
 {
    struct vk_command_buffer vk;
 
+   /* enum tu_synchack_ctx: which kind of command the next flush belongs to */
+   uint8_t synchack_ctx;
+   bool synchack_prev_uav;
+
    struct tu_device *device;
 
    struct u_trace_iterator trace_renderpass_start;

@@ -126,10 +126,31 @@ tu_env_deinit(void)
       os_file_notifier_destroy(tu_debug_notifier);
 }
 
+static const struct debug_control tu_synchack_options[] = {
+   { "draw", TU_SYNCHACK_DRAW },
+   { "idraw", TU_SYNCHACK_IDRAW },
+   { "disp", TU_SYNCHACK_DISP },
+   { "idisp", TU_SYNCHACK_IDISP },
+   { "other", TU_SYNCHACK_OTHER },
+   { "rpb", TU_SYNCHACK_RPB },
+   { "uav", TU_SYNCHACK_UAV },
+   { "prog", TU_SYNCHACK_PROG },
+   { "wfi", TU_SYNCHACK_WFI },
+   { "wfm", TU_SYNCHACK_WFM },
+   { "wmw", TU_SYNCHACK_WMW },
+   { "uavfs", TU_SYNCHACK_UAVFS },
+   { "uavvs", TU_SYNCHACK_UAVVS },
+   { "uavnext", TU_SYNCHACK_UAVNEXT },
+   { NULL, 0 }
+};
+
 static void
 tu_env_init_once(void)
 {
    tu_env.start_debug = tu_env.debug = parse_debug_string(os_get_option("TU_DEBUG"), tu_debug_options);
+   tu_env.synchack = (uint32_t) parse_debug_string(os_get_option("TU_SYNCHACK"), tu_synchack_options);
+   if (tu_env.synchack)
+      mesa_logi("TU_SYNCHACK=0x%x", tu_env.synchack);
 
    if (TU_DEBUG(STARTUP))
       mesa_logi("TU_DEBUG=0x%" PRIx64, tu_env.debug.load());

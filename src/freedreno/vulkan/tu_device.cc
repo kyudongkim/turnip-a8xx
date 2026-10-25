@@ -371,7 +371,7 @@ get_device_extensions(const struct tu_physical_device *device,
       .EXT_mutable_descriptor_type = true,
       .EXT_nested_command_buffer = true,
       .EXT_non_seamless_cube_map = true,
-      .EXT_physical_device_drm = !is_kgsl(device->instance),
+      .EXT_physical_device_drm = !is_kgsl(device->instance) || device->has_local || device->has_master,
       .EXT_pipeline_creation_cache_control = true,
       .EXT_pipeline_creation_feedback = true,
 #ifdef TU_USE_WSI_PLATFORM

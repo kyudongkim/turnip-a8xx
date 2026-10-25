@@ -10,6 +10,11 @@
 #include <stdint.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
+#include <dirent.h>
+#include <string.h>
+#include <stdlib.h>
 
 #define __user
 #include "ion/ion.h"
@@ -1988,7 +1993,63 @@ tu_knl_kgsl_load(struct tu_instance *instance, int fd)
    device->has_raytracing = tu_kgsl_get_raytracing(fd);
 
    device->submitqueue_priority_count = 1;
-   
+
+   /* Compat layers (e.g. proot/gamescope setups on Android) provide a DRM
+    * render node next to kgsl and expect VK_EXT_physical_device_drm so that
+    * wlroots/gamescope can find it. Report the first render/primary node we
+    * can see, or the ones given by TU_KGSL_DRM_RENDER_NODE /
+    * TU_KGSL_DRM_PRIMARY_NODE.
+    */
+   {
+      struct stat st;
+      const char *rn = getenv("TU_KGSL_DRM_RENDER_NODE");
+      const char *pn = getenv("TU_KGSL_DRM_PRIMARY_NODE");
+      char path[300];
+      if (rn && stat(rn, &st) == 0 && S_ISCHR(st.st_mode)) {
+         device->has_local = true;
+         device->local_major = major(st.st_rdev);
+         device->local_minor = minor(st.st_rdev);
+      }
+      if (pn && stat(pn, &st) == 0 && S_ISCHR(st.st_mode)) {
+         device->has_master = true;
+         device->master_major = major(st.st_rdev);
+         device->master_minor = minor(st.st_rdev);
+      }
+      DIR *dir = opendir("/dev/dri");
+      if (dir) {
+         struct dirent *e;
+         while ((e = readdir(dir))) {
+            bool is_render = strncmp(e->d_name, "renderD", 7) == 0;
+            bool is_card = strncmp(e->d_name, "card", 4) == 0;
+            if (!is_render && !is_card)
+               continue;
+            snprintf(path, sizeof(path), "/dev/dri/%s", e->d_name);
+            if (stat(path, &st) != 0 || !S_ISCHR(st.st_mode))
+               continue;
+            if (is_render && !device->has_local) {
+               device->has_local = true;
+               device->local_major = major(st.st_rdev);
+               device->local_minor = minor(st.st_rdev);
+            } else if (is_card && !device->has_master) {
+               device->has_master = true;
+               device->master_major = major(st.st_rdev);
+               device->master_minor = minor(st.st_rdev);
+            }
+         }
+         closedir(dir);
+      }
+      /* gamescope insists on a primary node; compat layers usually only
+       * provide a render node, so report it for both. */
+      if (device->has_local && !device->has_master) {
+         device->has_master = true;
+         device->master_major = device->local_major;
+         device->master_minor = device->local_minor;
+      }
+      if (device->has_local)
+         mesa_logi("kgsl: reporting DRM render node %u:%u",
+                   (unsigned) device->local_major, (unsigned) device->local_minor);
+   }
+
    device->timeline_type = vk_sync_timeline_get_type(&vk_kgsl_sync_type);
 
    device->sync_types[0] = &vk_kgsl_sync_type;

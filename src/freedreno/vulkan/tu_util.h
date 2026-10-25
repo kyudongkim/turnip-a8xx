@@ -80,6 +80,35 @@ enum tu_debug_flags : uint64_t
 struct tu_env {
     std::atomic<uint64_t> debug;
     uint64_t start_debug;
+    /* TU_SYNCHACK: diagnostic forced waits (see tu_util.cc) */
+    uint32_t synchack;
+};
+
+enum tu_synchack_flags {
+   TU_SYNCHACK_DRAW  = 1u << 0, /* every direct draw */
+   TU_SYNCHACK_IDRAW = 1u << 1, /* every indirect draw */
+   TU_SYNCHACK_DISP  = 1u << 2, /* every direct dispatch */
+   TU_SYNCHACK_IDISP = 1u << 3, /* every indirect dispatch */
+   TU_SYNCHACK_OTHER = 1u << 4, /* every other flush point (blits, copies, barriers, events...) */
+   TU_SYNCHACK_RPB   = 1u << 5, /* draws that follow a barrier/dependency inside the render pass */
+   TU_SYNCHACK_UAV   = 1u << 6, /* draws whose graphics shaders use SSBO/image (UAV) instructions */
+   TU_SYNCHACK_PROG  = 1u << 7, /* draws where the shader program changed */
+   TU_SYNCHACK_WFI   = 1u << 8, /* wait kind: WAIT_FOR_IDLE only */
+   TU_SYNCHACK_WFM   = 1u << 9, /* wait kind: CP_WAIT_FOR_ME only */
+   TU_SYNCHACK_WMW   = 1u << 10, /* wait kind: CP_WAIT_MEM_WRITES only */
+   TU_SYNCHACK_UAVFS = 1u << 11, /* draws whose FS uses UAV */
+   TU_SYNCHACK_UAVVS = 1u << 12, /* draws whose VS/TCS/TES/GS uses UAV */
+   TU_SYNCHACK_UAVNEXT = 1u << 13, /* the draw right after a UAV draw */
+};
+
+enum tu_synchack_ctx {
+   TU_SYNCHACK_CTX_OTHER = 0,
+   TU_SYNCHACK_CTX_DRAW,
+   TU_SYNCHACK_CTX_IDRAW,
+   TU_SYNCHACK_CTX_DISP,
+   TU_SYNCHACK_CTX_IDISP,
+   TU_SYNCHACK_CTX_FORCE,   /* draw decided to wait */
+   TU_SYNCHACK_CTX_NOWAIT,  /* draw decided not to wait */
 };
 
 extern struct tu_env tu_env;

@@ -371,6 +371,30 @@ tu6_emit_flushes(struct tu_cmd_buffer *cmd_buffer,
                  TU_CMD_FLAG_WAIT_FOR_IDLE |
                  TU_CMD_FLAG_WAIT_FOR_ME;
 
+   if (unlikely(tu_env.synchack)) {
+      const uint32_t h = tu_env.synchack;
+      bool hit = false;
+      switch (cmd_buffer->synchack_ctx) {
+      case TU_SYNCHACK_CTX_DRAW:   hit = h & TU_SYNCHACK_DRAW;  break;
+      case TU_SYNCHACK_CTX_IDRAW:  hit = h & TU_SYNCHACK_IDRAW; break;
+      case TU_SYNCHACK_CTX_DISP:   hit = h & TU_SYNCHACK_DISP;  break;
+      case TU_SYNCHACK_CTX_IDISP:  hit = h & TU_SYNCHACK_IDISP; break;
+      case TU_SYNCHACK_CTX_FORCE:  hit = true;  break;
+      case TU_SYNCHACK_CTX_NOWAIT: hit = false; break;
+      default:                     hit = h & TU_SYNCHACK_OTHER; break;
+      }
+      if (hit) {
+         const uint32_t kinds = h & (TU_SYNCHACK_WFI | TU_SYNCHACK_WFM |
+                                     TU_SYNCHACK_WMW);
+         if (!kinds || (kinds & TU_SYNCHACK_WMW))
+            flushes |= TU_CMD_FLAG_WAIT_MEM_WRITES;
+         if (!kinds || (kinds & TU_SYNCHACK_WFI))
+            flushes |= TU_CMD_FLAG_WAIT_FOR_IDLE;
+         if (!kinds || (kinds & TU_SYNCHACK_WFM))
+            flushes |= TU_CMD_FLAG_WAIT_FOR_ME;
+      }
+   }
+
    /* Experiments show that invalidating CCU while it still has data in it
     * doesn't work, so make sure to always flush before invalidating in case
     * any data remains that hasn't yet been made available through a barrier.
@@ -629,7 +653,7 @@ void
 tu_emit_cache_flush_renderpass(struct tu_cmd_buffer *cmd_buffer)
 {
    if (!cmd_buffer->state.renderpass_cache.flush_bits &&
-       likely(!tu_env.debug))
+       likely(!tu_env.debug) && likely(!tu_env.synchack))
       return;
 
    struct tu_cs *cs = &cmd_buffer->draw_cs;
@@ -8674,7 +8698,64 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
    if (cmd->state.dirty & TU_CMD_DIRTY_FS)
       tu_flush_dynamic_input_attachments<CHIP>(cmd);
 
+   /* Workaround (A8xx): draws whose shaders use SSBO/image (UAV)
+    * instructions can hang the GPU unless the previous work has drained
+    * first (observed with Cyberpunk 2077 via vkd3d-proton on Adreno 830:
+    * fences never signal, kgsl recovers every frame). A WAIT_FOR_IDLE before
+    * such draws avoids it.
+    * TU_UAV_WFI=all (default) | vs (pre-rasterization stages only) | off
+    */
+   if (CHIP >= A8XX) {
+      static int uav_wfi_mode = -1; /* 0 off, 1 vs, 2 all */
+      if (unlikely(uav_wfi_mode < 0)) {
+         const char *m = os_get_option("TU_UAV_WFI");
+         uav_wfi_mode = !m ? 2 : !strcmp(m, "off") ? 0 : !strcmp(m, "vs") ? 1 : 2;
+      }
+      if (uav_wfi_mode) {
+         const unsigned last = uav_wfi_mode == 2 ? MESA_SHADER_FRAGMENT
+                                                 : MESA_SHADER_GEOMETRY;
+         for (unsigned s = MESA_SHADER_VERTEX; s <= last; s++) {
+            const struct tu_shader *sh = cmd->state.shaders[s];
+            if (sh && sh->variant && sh->variant->has_ssbo) {
+               cmd->state.renderpass_cache.flush_bits |=
+                  TU_CMD_FLAG_WAIT_FOR_IDLE;
+               break;
+            }
+         }
+      }
+   }
+
+   /* draw_count is 0 for indirect draws */
+   if (unlikely(tu_env.synchack)) {
+      const uint32_t h = tu_env.synchack;
+      bool hit = h & (draw_count == 0 ? TU_SYNCHACK_IDRAW : TU_SYNCHACK_DRAW);
+      if ((h & TU_SYNCHACK_RPB) && cmd->state.renderpass_cache.flush_bits)
+         hit = true;
+      if ((h & TU_SYNCHACK_PROG) && (cmd->state.dirty & TU_CMD_DIRTY_PROGRAM))
+         hit = true;
+      bool uav_fs = false, uav_geom = false;
+      for (unsigned s = MESA_SHADER_VERTEX; s <= MESA_SHADER_FRAGMENT; s++) {
+         const struct tu_shader *sh = cmd->state.shaders[s];
+         if (sh && sh->variant && sh->variant->has_ssbo) {
+            if (s == MESA_SHADER_FRAGMENT)
+               uav_fs = true;
+            else
+               uav_geom = true;
+         }
+      }
+      if ((h & TU_SYNCHACK_UAV) && (uav_fs || uav_geom))
+         hit = true;
+      if ((h & TU_SYNCHACK_UAVFS) && uav_fs)
+         hit = true;
+      if ((h & TU_SYNCHACK_UAVVS) && uav_geom)
+         hit = true;
+      if ((h & TU_SYNCHACK_UAVNEXT) && cmd->synchack_prev_uav)
+         hit = true;
+      cmd->synchack_prev_uav = uav_fs || uav_geom;
+      cmd->synchack_ctx = hit ? TU_SYNCHACK_CTX_FORCE : TU_SYNCHACK_CTX_NOWAIT;
+   }
    tu_emit_cache_flush_renderpass<CHIP>(cmd);
+   cmd->synchack_ctx = TU_SYNCHACK_CTX_OTHER;
 
   if (BITSET_TEST(cmd->vk.dynamic_graphics_state.dirty,
                   MESA_VK_DYNAMIC_IA_PRIMITIVE_RESTART_ENABLE) ||
@@ -10103,7 +10184,10 @@ tu_dispatch(struct tu_cmd_buffer *cmd,
    /* TODO: We could probably flush less if we add a compute_flush_bits
     * bitfield.
     */
+   cmd->synchack_ctx = info->indirect ? TU_SYNCHACK_CTX_IDISP
+                                      : TU_SYNCHACK_CTX_DISP;
    tu_emit_cache_flush<CHIP>(cmd);
+   cmd->synchack_ctx = TU_SYNCHACK_CTX_OTHER;
 
    /* note: no reason to have this in a separate IB */
    tu_cs_emit_state_ib(cs, tu_emit_consts<CHIP>(cmd, true));
