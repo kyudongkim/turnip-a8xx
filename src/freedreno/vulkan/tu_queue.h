@@ -10,6 +10,7 @@
 #ifndef TU_QUEUE_H
 #define TU_QUEUE_H
 
+#include <atomic>
 #include "tu_common.h"
 
 enum tu_queue_type
@@ -36,6 +37,10 @@ struct tu_queue
    unsigned render_pass_idx;
 
    int fence;           /* timestamp/fence of the last queue submission */
+
+   /* TU_HANGLOG */
+   std::atomic<uint32_t> hanglog_last_ts{0};
+   std::atomic<bool> hanglog_has_submit{false};
 };
 VK_DEFINE_HANDLE_CASTS(tu_queue, vk.base, VkQueue, VK_OBJECT_TYPE_QUEUE)
 

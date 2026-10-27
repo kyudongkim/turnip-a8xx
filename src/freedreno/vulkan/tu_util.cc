@@ -76,6 +76,18 @@ const uint64_t tu_runtime_debug_flags =
    TU_DEBUG_NO_BIN_MERGING;
 
 os_file_notifier_t tu_debug_notifier;
+
+bool tu_hanglog_enabled;
+struct tu_hanglog_entry tu_hanglog_ring[TU_HANGLOG_RING];
+static std::atomic<uint32_t> tu_hanglog_counter{1};
+uint32_t
+tu_hanglog_next_id(void)
+{
+   uint32_t id = tu_hanglog_counter.fetch_add(1, std::memory_order_relaxed);
+   if (id == 0)
+      id = tu_hanglog_counter.fetch_add(1, std::memory_order_relaxed);
+   return id;
+}
 struct tu_env tu_env;
 
 static uint64_t
@@ -149,6 +161,7 @@ tu_env_init_once(void)
 {
    tu_env.start_debug = tu_env.debug = parse_debug_string(os_get_option("TU_DEBUG"), tu_debug_options);
    tu_env.synchack = (uint32_t) parse_debug_string(os_get_option("TU_SYNCHACK"), tu_synchack_options);
+   tu_hanglog_enabled = debug_get_bool_option("TU_HANGLOG", false);
    if (tu_env.synchack)
       mesa_logi("TU_SYNCHACK=0x%x", tu_env.synchack);
 

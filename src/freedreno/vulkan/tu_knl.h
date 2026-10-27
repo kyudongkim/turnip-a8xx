@@ -269,6 +269,8 @@ void tu_sparse_vma_finish(struct tu_device *device,
                           struct tu_sparse_vma *vma);
 
 VkResult tu_knl_kgsl_load(struct tu_instance *instance, int fd);
+void tu_kgsl_hanglog_start(struct tu_device *dev);
+void tu_kgsl_hanglog_stop(struct tu_device *dev);
 
 struct _drmVersion;
 VkResult tu_knl_drm_msm_load(struct tu_instance *instance,

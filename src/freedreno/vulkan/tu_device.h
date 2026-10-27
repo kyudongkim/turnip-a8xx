@@ -293,6 +293,10 @@ struct tu6_global
    uint64_t preemption_latency_cmp_scratch;
    uint64_t zero_64b;
 
+   /* TU_HANGLOG: id of the last draw/dispatch the CP reached */
+   volatile uint32_t hanglog_marker;
+   uint32_t _pad_hanglog;
+
    struct bcolor_entry bcolor_builtin[TU_BORDER_COLOR_BUILTIN];
    struct bcolor_entry bcolor[];
 };
@@ -311,7 +315,13 @@ struct tu_virtio_device;
 
 struct tu_device
 {
+
    struct vk_device vk;
+
+   /* TU_HANGLOG watchdog */
+   pthread_t hanglog_thread;
+   std::atomic<bool> hanglog_stop{false};
+   bool hanglog_running;
    struct tu_instance *instance;
 
    struct tu_queue *queues[TU_MAX_QUEUE_FAMILIES];

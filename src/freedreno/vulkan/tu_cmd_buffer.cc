@@ -4546,6 +4546,9 @@ tu_BeginCommandBuffer(VkCommandBuffer commandBuffer,
                       const VkCommandBufferBeginInfo *pBeginInfo)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd_buffer, commandBuffer);
+   cmd_buffer->hanglog_seq = 0;
+   cmd_buffer->hanglog_idx = 0;
+   cmd_buffer->hanglog_rp = 0;
    VkResult result = tu_cmd_buffer_begin(cmd_buffer, pBeginInfo);
    if (result != VK_SUCCESS)
       return result;
@@ -7186,6 +7189,7 @@ tu_CmdBeginRenderPass2(VkCommandBuffer commandBuffer,
                        const VkSubpassBeginInfo *pSubpassBeginInfo)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
+   cmd->hanglog_rp++;
 
    if (TU_DEBUG(DYNAMIC)) {
       vk_common_CmdBeginRenderPass2(commandBuffer, pRenderPassBegin,
@@ -7328,6 +7332,7 @@ tu_CmdBeginRendering(VkCommandBuffer commandBuffer,
                      const VkRenderingInfo *pRenderingInfo)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
+   cmd->hanglog_rp++;
 
    tu_setup_dynamic_render_pass(cmd, pRenderingInfo);
    tu_setup_dynamic_framebuffer(cmd, pRenderingInfo);
@@ -8641,6 +8646,53 @@ tu_flush_dynamic_input_attachments(struct tu_cmd_buffer *cmd)
    }
 }
 
+static void
+tu_hanglog_fill_hash(char *dst, const struct tu_shader *sh)
+{
+   if (sh && sh->variant)
+      snprintf(dst, 9, "%.8s", sh->variant->blake3_str);
+   else
+      dst[0] = '-', dst[1] = 0;
+}
+
+template <chip CHIP>
+static void
+tu_hanglog_mark(struct tu_cmd_buffer *cmd, struct tu_cs *cs, uint8_t kind)
+{
+   static std::atomic<uint32_t> seq_counter{1};
+   if (!cmd->hanglog_seq)
+      cmd->hanglog_seq = seq_counter.fetch_add(1, std::memory_order_relaxed);
+
+   uint32_t id = tu_hanglog_next_id();
+   struct tu_hanglog_entry *e = &tu_hanglog_ring[id & (TU_HANGLOG_RING - 1)];
+   e->id = id;
+   e->kind = kind;
+   e->rp = cmd->hanglog_rp;
+   e->cmd_seq = cmd->hanglog_seq;
+   e->idx = cmd->hanglog_idx++;
+   e->uav_mask = 0;
+   if (kind >= 3) {
+      const struct tu_shader *sh = cmd->state.shaders[MESA_SHADER_COMPUTE];
+      if (sh && sh->variant && sh->variant->has_ssbo)
+         e->uav_mask |= 1u << 5;
+      tu_hanglog_fill_hash(e->cs, sh);
+      e->vs[0] = e->fs[0] = 0;
+   } else {
+      for (unsigned s = MESA_SHADER_VERTEX; s <= MESA_SHADER_FRAGMENT; s++) {
+         const struct tu_shader *sh = cmd->state.shaders[s];
+         if (sh && sh->variant && sh->variant->has_ssbo)
+            e->uav_mask |= 1u << s;
+      }
+      tu_hanglog_fill_hash(e->vs, cmd->state.shaders[MESA_SHADER_VERTEX]);
+      tu_hanglog_fill_hash(e->fs, cmd->state.shaders[MESA_SHADER_FRAGMENT]);
+      e->cs[0] = 0;
+   }
+
+   tu_cs_emit_pkt7(cs, CP_MEM_WRITE, 3);
+   tu_cs_emit_qw(cs, global_iova(cmd, hanglog_marker));
+   tu_cs_emit(cs, id);
+}
+
 template <chip CHIP>
 static VkResult
 tu6_draw_common(struct tu_cmd_buffer *cmd,
@@ -8756,6 +8808,9 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
    }
    tu_emit_cache_flush_renderpass<CHIP>(cmd);
    cmd->synchack_ctx = TU_SYNCHACK_CTX_OTHER;
+
+   if (unlikely(tu_hanglog_enabled))
+      tu_hanglog_mark<CHIP>(cmd, cs, draw_count == 0 ? 2 : 1);
 
   if (BITSET_TEST(cmd->vk.dynamic_graphics_state.dirty,
                   MESA_VK_DYNAMIC_IA_PRIMITIVE_RESTART_ENABLE) ||
@@ -10188,6 +10243,9 @@ tu_dispatch(struct tu_cmd_buffer *cmd,
                                       : TU_SYNCHACK_CTX_DISP;
    tu_emit_cache_flush<CHIP>(cmd);
    cmd->synchack_ctx = TU_SYNCHACK_CTX_OTHER;
+
+   if (unlikely(tu_hanglog_enabled))
+      tu_hanglog_mark<CHIP>(cmd, cs, info->indirect ? 4 : 3);
 
    /* note: no reason to have this in a separate IB */
    tu_cs_emit_state_ib(cs, tu_emit_consts<CHIP>(cmd, true));

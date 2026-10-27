@@ -709,6 +709,9 @@ struct tu_cmd_buffer
    /* enum tu_synchack_ctx: which kind of command the next flush belongs to */
    uint8_t synchack_ctx;
    bool synchack_prev_uav;
+   uint32_t hanglog_seq;
+   uint32_t hanglog_idx;
+   uint16_t hanglog_rp;
 
    struct tu_device *device;
 

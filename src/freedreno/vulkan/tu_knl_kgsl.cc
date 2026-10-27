@@ -84,7 +84,21 @@ kgsl_submitqueue_new(struct tu_device *dev, struct tu_queue *queue)
          mesa_logi("kgsl: drawctxt flags 0x%x", req.flags);
    }
 
-   int ret = safe_ioctl(dev->physical_device->local_fd, IOCTL_KGSL_DRAWCTXT_CREATE, &req);
+   int ret;
+   if (tu_hanglog_enabled) {
+      struct kgsl_drawctxt_create req2 = req;
+      req2.flags |= KGSL_CONTEXT_FAULT_INFO;
+      ret = safe_ioctl(dev->physical_device->local_fd, IOCTL_KGSL_DRAWCTXT_CREATE, &req2);
+      if (!ret) {
+         mesa_logw("TU_HANGLOG: context %u created with FAULT_INFO", req2.drawctxt_id);
+         queue->msm_queue_id = req2.drawctxt_id;
+         return 0;
+      }
+      mesa_logw("TU_HANGLOG: FAULT_INFO context flag rejected (%s), continuing without",
+                strerror(errno));
+   }
+
+   ret = safe_ioctl(dev->physical_device->local_fd, IOCTL_KGSL_DRAWCTXT_CREATE, &req);
    if (ret)
       return ret;
 
@@ -1731,6 +1745,10 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
          goto fail_submit;
       }
       timestamp = req.timestamp;
+      if (unlikely(tu_hanglog_enabled)) {
+         queue->hanglog_last_ts.store(timestamp, std::memory_order_relaxed);
+         queue->hanglog_has_submit.store(true, std::memory_order_release);
+      }
    } else {
       /* kgsl doesn't support multiple bind commands at once */
       uint32_t i = 0;
@@ -1864,6 +1882,172 @@ kgsl_device_get_suspend_count(struct tu_device *dev, uint64_t *suspend_count)
    /* kgsl doesn't have a way to get it */
    *suspend_count = 0;
    return 0;
+}
+
+
+/* ---------------- TU_HANGLOG watchdog ---------------- */
+
+static const char *
+hanglog_kind_str(uint8_t k)
+{
+   switch (k) {
+   case 1: return "draw";
+   case 2: return "draw-indirect";
+   case 3: return "dispatch";
+   case 4: return "dispatch-indirect";
+   default: return "?";
+   }
+}
+
+static void
+hanglog_print_entry(const char *tag, uint32_t id)
+{
+   const struct tu_hanglog_entry *e = &tu_hanglog_ring[id & (TU_HANGLOG_RING - 1)];
+   if (e->id != id) {
+      mesa_logw("TU_HANGLOG:   %s id %u: (not in ring)", tag, id);
+      return;
+   }
+   mesa_logw("TU_HANGLOG:   %s id %u: %s cmdbuf#%u rp%u idx%u uav=0x%x vs=%s fs=%s cs=%s",
+             tag, id, hanglog_kind_str(e->kind), e->cmd_seq, e->rp, e->idx,
+             e->uav_mask, e->vs, e->fs, e->cs);
+}
+
+static void
+hanglog_query_faults(struct tu_device *dev, uint32_t ctx)
+{
+   struct kgsl_context_property_fault f = {};
+   struct kgsl_context_property cp = {
+      .data = (uint64_t)(uintptr_t)&f,
+      .size = sizeof(f),
+      .type = KGSL_CONTEXT_PROP_FAULTS,
+      .contextid = ctx,
+   };
+   if (get_kgsl_prop(dev->fd, KGSL_PROP_CONTEXT_PROPERTY, &cp, sizeof(cp)) == VK_SUCCESS)
+      mesa_logw("TU_HANGLOG:   ctx %u kernel fault count %d (last fault ts %u)", ctx, f.faults, f.timestamp);
+   else
+      mesa_logw("TU_HANGLOG:   ctx %u fault count query failed (%s)", ctx, strerror(errno));
+
+   struct kgsl_fault_report rep = { .context_id = ctx };
+   if (safe_ioctl(dev->fd, IOCTL_KGSL_GET_FAULT_REPORT, &rep)) {
+      mesa_logw("TU_HANGLOG:   fault report unsupported (%s)", strerror(errno));
+      return;
+   }
+   if (!rep.faultnents) {
+      mesa_logw("TU_HANGLOG:   fault report: none");
+      return;
+   }
+   uint32_t n = MIN2(rep.faultnents, 4u);
+   struct kgsl_fault faults[4] = {};
+   rep.faultlist = (uint64_t)(uintptr_t)faults;
+   rep.faultnents = n;
+   rep.faultsize = sizeof(struct kgsl_fault);
+   if (safe_ioctl(dev->fd, IOCTL_KGSL_GET_FAULT_REPORT, &rep)) {
+      mesa_logw("TU_HANGLOG:   fault report read failed (%s)", strerror(errno));
+      return;
+   }
+   for (uint32_t i = 0; i < n; i++) {
+      mesa_logw("TU_HANGLOG:   fault type %u count %u", faults[i].type, faults[i].count);
+      if (faults[i].type == KGSL_FAULT_TYPE_PAGEFAULT && faults[i].count) {
+         uint32_t c = MIN2(faults[i].count, 4u);
+         struct kgsl_pagefault_report pf[4] = {};
+         faults[i].fault = (uint64_t)(uintptr_t)pf;
+         faults[i].count = c;
+         faults[i].size = sizeof(pf[0]);
+         struct kgsl_fault one = faults[i];
+         struct kgsl_fault_report r2 = {
+            .faultlist = (uint64_t)(uintptr_t)&one, .faultnents = 1,
+            .faultsize = sizeof(one), .context_id = ctx,
+         };
+         if (!safe_ioctl(dev->fd, IOCTL_KGSL_GET_FAULT_REPORT, &r2)) {
+            for (uint32_t j = 0; j < c; j++)
+               mesa_logw("TU_HANGLOG:     pagefault addr 0x%" PRIx64 " type 0x%x",
+                         (uint64_t) pf[j].fault_addr, pf[j].fault_type);
+         }
+      }
+   }
+}
+
+struct hanglog_qstate {
+   uint32_t last_retired;
+   int64_t since_ns;
+   bool reported;
+   int64_t reported_at;
+};
+
+static void *
+hanglog_thread(void *data)
+{
+   struct tu_device *dev = (struct tu_device *) data;
+   struct hanglog_qstate st[TU_MAX_QUEUE_FAMILIES][8] = {};
+   const int64_t threshold = 2000000000ll;
+   mesa_logw("TU_HANGLOG: watchdog running (pid %d)", (int) getpid());
+
+   while (!dev->hanglog_stop.load(std::memory_order_acquire)) {
+      usleep(250 * 1000);
+      int64_t now = os_time_get_nano();
+      for (unsigned i = 0; i < TU_MAX_QUEUE_FAMILIES; i++) {
+         for (int q = 0; q < MIN2(dev->queue_count[i], 8); q++) {
+            struct tu_queue *queue = &dev->queues[i][q];
+            if (vk_queue_is_emulated(&queue->vk) ||
+                !queue->hanglog_has_submit.load(std::memory_order_acquire))
+               continue;
+            struct hanglog_qstate *s = &st[i][q];
+            uint32_t submitted = queue->hanglog_last_ts.load(std::memory_order_relaxed);
+            struct kgsl_cmdstream_readtimestamp_ctxtid rd = {
+               .context_id = queue->msm_queue_id,
+               .type = KGSL_TIMESTAMP_RETIRED,
+            };
+            if (safe_ioctl(dev->fd, IOCTL_KGSL_CMDSTREAM_READTIMESTAMP_CTXTID, &rd))
+               continue;
+            bool idle = timestamp_cmp(rd.timestamp, submitted);
+            if (idle || rd.timestamp != s->last_retired) {
+               if (s->reported) {
+                  mesa_logw("TU_HANGLOG: ctx %u RESUMED after %.1f s (retired %u, submitted %u, marker %u)",
+                            queue->msm_queue_id, (now - s->since_ns) / 1e9,
+                            rd.timestamp, submitted, dev->global_bo_map->hanglog_marker);
+                  hanglog_query_faults(dev, queue->msm_queue_id);
+               }
+               s->last_retired = rd.timestamp;
+               s->since_ns = now;
+               s->reported = false;
+               continue;
+            }
+            if (!s->reported && now - s->since_ns > threshold) {
+               s->reported = true;
+               uint32_t marker = dev->global_bo_map->hanglog_marker;
+               mesa_logw("TU_HANGLOG: ctx %u STALLED %.1f s: retired ts %u, submitted ts %u, CP marker %u",
+                         queue->msm_queue_id, (now - s->since_ns) / 1e9,
+                         rd.timestamp, submitted, marker);
+               for (int k = 3; k >= 1; k--)
+                  if (marker > (uint32_t) k)
+                     hanglog_print_entry("before", marker - k);
+               hanglog_print_entry("AT", marker);
+               hanglog_query_faults(dev, queue->msm_queue_id);
+            }
+         }
+      }
+   }
+   return NULL;
+}
+
+void
+tu_kgsl_hanglog_start(struct tu_device *dev)
+{
+   if (!tu_hanglog_enabled)
+      return;
+   dev->hanglog_stop.store(false);
+   if (pthread_create(&dev->hanglog_thread, NULL, hanglog_thread, dev) == 0)
+      dev->hanglog_running = true;
+}
+
+void
+tu_kgsl_hanglog_stop(struct tu_device *dev)
+{
+   if (!dev->hanglog_running)
+      return;
+   dev->hanglog_stop.store(true, std::memory_order_release);
+   pthread_join(dev->hanglog_thread, NULL);
+   dev->hanglog_running = false;
 }
 
 static VkResult

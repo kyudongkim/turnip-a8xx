@@ -3262,6 +3262,8 @@ tu_CreateDevice(VkPhysicalDevice physicalDevice,
                      tu_trace_delete_flush_data);
 
    tu_breadcrumbs_init(device);
+   if (is_kgsl(physical_device->instance))
+      tu_kgsl_hanglog_start(device);
 
    if (FD_RD_DUMP(ENABLE)) {
       struct vk_app_info *app_info = &device->instance->vk.app_info;
@@ -3359,6 +3361,7 @@ tu_DestroyDevice(VkDevice _device, const VkAllocationCallbacks *pAllocator)
    if (FD_RD_DUMP(ENABLE))
       fd_rd_output_fini(&device->rd_output);
 
+   tu_kgsl_hanglog_stop(device);
    tu_breadcrumbs_finish(device);
 
    u_trace_context_fini(&device->trace_context);

@@ -113,6 +113,21 @@ enum tu_synchack_ctx {
 
 extern struct tu_env tu_env;
 
+/* TU_HANGLOG=1: lightweight GPU hang diagnostics (see tu_knl_kgsl.cc) */
+struct tu_hanglog_entry {
+   uint32_t id;
+   uint8_t kind;      /* 1 draw, 2 indirect draw, 3 dispatch, 4 indirect dispatch */
+   uint8_t uav_mask;  /* bit per stage VS..FS/CS using SSBO/image */
+   uint16_t rp;       /* render pass index within the command buffer */
+   uint32_t cmd_seq;  /* command buffer recording sequence number */
+   uint32_t idx;      /* draw/dispatch index within the command buffer */
+   char vs[9], fs[9], cs[9];
+};
+#define TU_HANGLOG_RING (1u << 16)
+extern bool tu_hanglog_enabled;
+extern struct tu_hanglog_entry tu_hanglog_ring[TU_HANGLOG_RING];
+uint32_t tu_hanglog_next_id(void);
+
 /*
  * Note: tu_env_init() must be called before using the TU_DEBUG* macro.
  */
