@@ -3199,8 +3199,17 @@ tu_upload_variant(struct tu_cs *cs,
                        variant->name ? variant->name : "?",
                        ir3_shader_stage((struct ir3_shader_variant *) variant),
                        variant->blake3_str, variant->info.size);
-               ir3_shader_disasm((struct ir3_shader_variant *) variant,
-                                 (uint32_t *) variant->bin, stderr);
+               /* Raw machine code as hex (disassemble offline with
+                * freedreno's ir3 disassembler); calling the in-driver
+                * disassembler here is not safe for cached variants.
+                */
+               const uint32_t *bin = (const uint32_t *) variant->bin;
+               for (uint32_t off = 0; bin && off < variant->info.size / 4; off += 8) {
+                  fprintf(stderr, "TU_HANGLOG_DUMP: %.8s %04x:", variant->blake3_str, off * 4);
+                  for (uint32_t k = off; k < MIN2(off + 8, variant->info.size / 4); k++)
+                     fprintf(stderr, " %08x", bin[k]);
+                  fprintf(stderr, "\n");
+               }
                fprintf(stderr, "TU_HANGLOG_DUMP: end %s\n", variant->blake3_str);
                fflush(stderr);
                break;
