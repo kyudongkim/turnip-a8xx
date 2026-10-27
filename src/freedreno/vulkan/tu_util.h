@@ -143,6 +143,7 @@ tu_hanglog_rp_slot(uint32_t seq, uint32_t rp)
    return (seq * 31u + rp) & (TU_HANGLOG_RPRING - 1);
 }
 extern bool tu_hanglog_enabled;
+extern std::atomic<uint32_t> tu_gmem_for_hits;
 extern struct tu_hanglog_entry tu_hanglog_ring[TU_HANGLOG_RING];
 uint32_t tu_hanglog_next_id(void);
 

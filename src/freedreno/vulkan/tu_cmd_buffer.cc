@@ -1507,6 +1507,7 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
 
    if (cmd->state.rp.force_gmem_hack) {
       cmd->state.rp.force_render_mode_reason = "TU_GMEM_FOR";
+      tu_gmem_for_hits.fetch_add(1, std::memory_order_relaxed);
       return false;
    }
 
@@ -6378,6 +6379,7 @@ tu_render_pass_state_merge(struct tu_cmd_buffer *cmd, const struct tu_render_pas
    dst->has_vtx_stats_query_in_rp |= src->has_vtx_stats_query_in_rp;
    dst->has_zpass_done_sample_count_write_in_rp |= src->has_zpass_done_sample_count_write_in_rp;
    dst->disable_gmem |= src->disable_gmem;
+   dst->force_gmem_hack |= src->force_gmem_hack;
    dst->sysmem_single_prim_mode |= src->sysmem_single_prim_mode;
    dst->lrz_disable_for_next_rp |= src->lrz_disable_for_next_rp;
    dst->lrz_write_disabled |= src->lrz_write_disabled;

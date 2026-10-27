@@ -2009,6 +2009,8 @@ hanglog_thread(void *data)
                 !queue->hanglog_has_submit.load(std::memory_order_acquire))
                continue;
             struct hanglog_qstate *s = &st[i][q];
+            if (!s->since_ns)
+               s->since_ns = os_time_get_nano();
             uint32_t submitted = queue->hanglog_last_ts.load(std::memory_order_relaxed);
             struct kgsl_cmdstream_readtimestamp_ctxtid rd = {
                .context_id = queue->msm_queue_id,
@@ -2032,9 +2034,10 @@ hanglog_thread(void *data)
             if (!s->reported && now - s->since_ns > threshold) {
                s->reported = true;
                uint32_t marker = dev->global_bo_map->hanglog_marker;
-               mesa_logw("TU_HANGLOG: ctx %u STALLED %.1f s: retired ts %u, submitted ts %u, CP marker %u",
+               mesa_logw("TU_HANGLOG: ctx %u STALLED %.1f s: retired ts %u, submitted ts %u, CP marker %u (GMEM_FOR passes so far: %u)",
                          queue->msm_queue_id, (now - s->since_ns) / 1e9,
-                         rd.timestamp, submitted, marker);
+                         rd.timestamp, submitted, marker,
+                         tu_gmem_for_hits.load(std::memory_order_relaxed));
                for (int k = 3; k >= 1; k--)
                   if (marker > (uint32_t) k)
                      hanglog_print_entry("before", marker - k);
