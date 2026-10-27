@@ -3184,6 +3184,34 @@ tu_upload_variant(struct tu_cs *cs,
    if (!variant)
       return 0;
 
+   /* TU_HANGLOG_DUMP=<blake3 prefix>[,<prefix>...]: print the native disasm
+    * of matching shaders to stderr (for hang reports).
+    */
+   {
+      static const char *dump = os_get_option("TU_HANGLOG_DUMP");
+      if (unlikely(dump && *dump)) {
+         const char *p = dump;
+         while (*p) {
+            const char *e = strchr(p, ',');
+            size_t len = e ? (size_t)(e - p) : strlen(p);
+            if (len && !strncmp(variant->blake3_str, p, len)) {
+               fprintf(stderr, "TU_HANGLOG_DUMP: begin %s stage %s blake3 %s size %u\n",
+                       variant->name ? variant->name : "?",
+                       ir3_shader_stage((struct ir3_shader_variant *) variant),
+                       variant->blake3_str, variant->info.size);
+               ir3_shader_disasm((struct ir3_shader_variant *) variant,
+                                 (uint32_t *) variant->bin, stderr);
+               fprintf(stderr, "TU_HANGLOG_DUMP: end %s\n", variant->blake3_str);
+               fflush(stderr);
+               break;
+            }
+            if (!e)
+               break;
+            p = e + 1;
+         }
+      }
+   }
+
    /* this expects to get enough alignment because shaders are allocated first
     * and total size is always aligned correctly
     * note: an assert in tu6_emit_xs_config validates the alignment

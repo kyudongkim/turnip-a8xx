@@ -153,6 +153,7 @@ static const struct debug_control tu_synchack_options[] = {
    { "uavfs", TU_SYNCHACK_UAVFS },
    { "uavvs", TU_SYNCHACK_UAVVS },
    { "uavnext", TU_SYNCHACK_UAVNEXT },
+   { "first", TU_SYNCHACK_FIRST },
    { NULL, 0 }
 };
 

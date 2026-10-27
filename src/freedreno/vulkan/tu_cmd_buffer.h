@@ -710,6 +710,7 @@ struct tu_cmd_buffer
    uint8_t synchack_ctx;
    bool synchack_prev_uav;
    uint32_t hanglog_seq;
+   uint32_t synchack_draws;
    uint32_t hanglog_idx;
    uint16_t hanglog_rp;
 

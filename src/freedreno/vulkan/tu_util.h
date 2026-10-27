@@ -99,6 +99,7 @@ enum tu_synchack_flags {
    TU_SYNCHACK_UAVFS = 1u << 11, /* draws whose FS uses UAV */
    TU_SYNCHACK_UAVVS = 1u << 12, /* draws whose VS/TCS/TES/GS uses UAV */
    TU_SYNCHACK_UAVNEXT = 1u << 13, /* the draw right after a UAV draw */
+   TU_SYNCHACK_FIRST = 1u << 14, /* first draw of each command buffer */
 };
 
 enum tu_synchack_ctx {

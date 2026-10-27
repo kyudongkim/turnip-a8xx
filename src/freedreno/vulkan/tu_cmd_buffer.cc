@@ -4547,6 +4547,7 @@ tu_BeginCommandBuffer(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd_buffer, commandBuffer);
    cmd_buffer->hanglog_seq = 0;
+   cmd_buffer->synchack_draws = 0;
    cmd_buffer->hanglog_idx = 0;
    cmd_buffer->hanglog_rp = 0;
    VkResult result = tu_cmd_buffer_begin(cmd_buffer, pBeginInfo);
@@ -8777,6 +8778,37 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
       }
    }
 
+   /* TU_HANGWAIT=<vs/fs blake3 prefix>[,...]: WAIT_FOR_IDLE + WAIT_FOR_ME
+    * before draws using a matching vertex or fragment shader.
+    */
+   {
+      static const char *hw = os_get_option("TU_HANGWAIT");
+      if (unlikely(hw && *hw)) {
+         bool match = false;
+         const struct tu_shader *shs[2] = {
+            cmd->state.shaders[MESA_SHADER_VERTEX],
+            cmd->state.shaders[MESA_SHADER_FRAGMENT],
+         };
+         for (unsigned k = 0; k < 2 && !match; k++) {
+            if (!shs[k] || !shs[k]->variant)
+               continue;
+            const char *p = hw;
+            while (*p && !match) {
+               const char *e = strchr(p, ',');
+               size_t len = e ? (size_t)(e - p) : strlen(p);
+               if (len && !strncmp(shs[k]->variant->blake3_str, p, len))
+                  match = true;
+               if (!e)
+                  break;
+               p = e + 1;
+            }
+         }
+         if (match)
+            cmd->state.renderpass_cache.flush_bits |=
+               TU_CMD_FLAG_WAIT_FOR_IDLE | TU_CMD_FLAG_WAIT_FOR_ME;
+      }
+   }
+
    /* draw_count is 0 for indirect draws */
    if (unlikely(tu_env.synchack)) {
       const uint32_t h = tu_env.synchack;
@@ -8804,10 +8836,13 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
       if ((h & TU_SYNCHACK_UAVNEXT) && cmd->synchack_prev_uav)
          hit = true;
       cmd->synchack_prev_uav = uav_fs || uav_geom;
+      if ((h & TU_SYNCHACK_FIRST) && cmd->synchack_draws == 0)
+         hit = true;
       cmd->synchack_ctx = hit ? TU_SYNCHACK_CTX_FORCE : TU_SYNCHACK_CTX_NOWAIT;
    }
    tu_emit_cache_flush_renderpass<CHIP>(cmd);
    cmd->synchack_ctx = TU_SYNCHACK_CTX_OTHER;
+   cmd->synchack_draws++;
 
    if (unlikely(tu_hanglog_enabled))
       tu_hanglog_mark<CHIP>(cmd, cs, draw_count == 0 ? 2 : 1);
