@@ -61,6 +61,29 @@ kgsl_submitqueue_new(struct tu_device *dev, struct tu_queue *queue)
               KGSL_CONTEXT_PREAMBLE,
    };
 
+   /* Diagnostics for GPU hangs on KGSL: tweak context creation.
+    *   TU_KGSL_PREEMPT=ring|fine     preemption style (default: kernel default)
+    *   TU_KGSL_CTX_TYPE=vk           tag the context as Vulkan
+    *   TU_KGSL_CTX_FLAGS=0x...       OR raw KGSL_CONTEXT_* flags
+    */
+   {
+      const char *pre = getenv("TU_KGSL_PREEMPT");
+      if (pre && !strcmp(pre, "ring"))
+         req.flags |= KGSL_CONTEXT_PREEMPT_STYLE_RINGBUFFER
+                      << KGSL_CONTEXT_PREEMPT_STYLE_SHIFT;
+      else if (pre && !strcmp(pre, "fine"))
+         req.flags |= KGSL_CONTEXT_PREEMPT_STYLE_FINEGRAIN
+                      << KGSL_CONTEXT_PREEMPT_STYLE_SHIFT;
+      const char *type = getenv("TU_KGSL_CTX_TYPE");
+      if (type && !strcmp(type, "vk"))
+         req.flags |= KGSL_CONTEXT_TYPE_VK << KGSL_CONTEXT_TYPE_SHIFT;
+      const char *raw = getenv("TU_KGSL_CTX_FLAGS");
+      if (raw)
+         req.flags |= (uint32_t) strtoul(raw, NULL, 0);
+      if (pre || type || raw)
+         mesa_logi("kgsl: drawctxt flags 0x%x", req.flags);
+   }
+
    int ret = safe_ioctl(dev->physical_device->local_fd, IOCTL_KGSL_DRAWCTXT_CREATE, &req);
    if (ret)
       return ret;
