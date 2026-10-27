@@ -8688,6 +8688,33 @@ tu_hanglog_mark(struct tu_cmd_buffer *cmd, struct tu_cs *cs, uint8_t kind)
       tu_hanglog_fill_hash(e->fs, cmd->state.shaders[MESA_SHADER_FRAGMENT]);
       e->cs[0] = 0;
    }
+   e->count = cmd->hanglog_count;
+   e->instances = cmd->hanglog_instances;
+   cmd->hanglog_instances = 0;
+   e->w = e->h = 0;
+   e->ncolor = e->samples = 0;
+   e->color_fmt = e->depth_fmt = 0;
+   if (kind < 3 && cmd->state.pass && cmd->state.subpass) {
+      const struct tu_render_pass *pass = cmd->state.pass;
+      const struct tu_subpass *sp = cmd->state.subpass;
+      e->w = (uint16_t) MIN2(cmd->state.render_areas[0].extent.width, 65535u);
+      e->h = (uint16_t) MIN2(cmd->state.render_areas[0].extent.height, 65535u);
+      e->ncolor = (uint8_t) sp->color_count;
+      for (uint32_t i = 0; i < sp->color_count; i++) {
+         uint32_t a = sp->color_attachments[i].attachment;
+         if (a != VK_ATTACHMENT_UNUSED) {
+            e->color_fmt = (uint16_t) pass->attachments[a].format;
+            e->samples = (uint8_t) pass->attachments[a].samples;
+            break;
+         }
+      }
+      uint32_t d = sp->depth_stencil_attachment.attachment;
+      if (d != VK_ATTACHMENT_UNUSED) {
+         e->depth_fmt = (uint16_t) pass->attachments[d].format;
+         if (!e->samples)
+            e->samples = (uint8_t) pass->attachments[d].samples;
+      }
+   }
 
    tu_cs_emit_pkt7(cs, CP_MEM_WRITE, 3);
    tu_cs_emit_qw(cs, global_iova(cmd, hanglog_marker));
@@ -8844,8 +8871,10 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
    cmd->synchack_ctx = TU_SYNCHACK_CTX_OTHER;
    cmd->synchack_draws++;
 
-   if (unlikely(tu_hanglog_enabled))
+   if (unlikely(tu_hanglog_enabled)) {
+      cmd->hanglog_count = draw_count;
       tu_hanglog_mark<CHIP>(cmd, cs, draw_count == 0 ? 2 : 1);
+   }
 
   if (BITSET_TEST(cmd->vk.dynamic_graphics_state.dirty,
                   MESA_VK_DYNAMIC_IA_PRIMITIVE_RESTART_ENABLE) ||
@@ -9408,6 +9437,7 @@ tu_CmdDraw(VkCommandBuffer commandBuffer,
 
    tu6_emit_vs_params(cmd, NULL, 0, firstVertex, firstInstance);
 
+   cmd->hanglog_instances = instanceCount;
    tu6_draw_common<CHIP>(cmd, cs, false, vertexCount);
 
    tu_cs_emit_pkt7(cs, CP_DRAW_INDX_OFFSET, 3);
@@ -9482,6 +9512,7 @@ tu_CmdDrawIndexed(VkCommandBuffer commandBuffer,
 
    tu6_emit_vs_params(cmd, NULL, 0, vertexOffset, firstInstance);
 
+   cmd->hanglog_instances = instanceCount;
    tu6_draw_common<CHIP>(cmd, cs, true, indexCount);
 
    tu_cs_emit_pkt7(cs, CP_DRAW_INDX_OFFSET, 7);
@@ -10279,8 +10310,11 @@ tu_dispatch(struct tu_cmd_buffer *cmd,
    tu_emit_cache_flush<CHIP>(cmd);
    cmd->synchack_ctx = TU_SYNCHACK_CTX_OTHER;
 
-   if (unlikely(tu_hanglog_enabled))
+   if (unlikely(tu_hanglog_enabled)) {
+      cmd->hanglog_count = info->indirect ? 0 :
+         info->blocks[0] * info->blocks[1] * info->blocks[2];
       tu_hanglog_mark<CHIP>(cmd, cs, info->indirect ? 4 : 3);
+   }
 
    /* note: no reason to have this in a separate IB */
    tu_cs_emit_state_ib(cs, tu_emit_consts<CHIP>(cmd, true));

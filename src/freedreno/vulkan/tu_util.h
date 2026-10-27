@@ -123,6 +123,10 @@ struct tu_hanglog_entry {
    uint32_t cmd_seq;  /* command buffer recording sequence number */
    uint32_t idx;      /* draw/dispatch index within the command buffer */
    char vs[9], fs[9], cs[9];
+   uint32_t count, instances;
+   uint16_t w, h;
+   uint8_t ncolor, samples;
+   uint16_t color_fmt, depth_fmt;
 };
 #define TU_HANGLOG_RING (1u << 16)
 extern bool tu_hanglog_enabled;
