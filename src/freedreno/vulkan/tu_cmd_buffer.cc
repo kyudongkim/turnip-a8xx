@@ -1511,6 +1511,22 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
       return false;
    }
 
+   /* TU_GMEM_DEPTH=1: GMEM for render passes with a depth/stencil attachment
+    * (scene passes).
+    */
+   {
+      static int withdepth = -1;
+      if (unlikely(withdepth < 0))
+         withdepth = debug_get_bool_option("TU_GMEM_DEPTH", false);
+      if (withdepth && cmd->state.subpass &&
+          cmd->state.subpass->depth_stencil_attachment.attachment !=
+             VK_ATTACHMENT_UNUSED) {
+         cmd->state.rp.force_render_mode_reason = "TU_GMEM_DEPTH";
+         tu_gmem_for_hits.fetch_add(1, std::memory_order_relaxed);
+         return false;
+      }
+   }
+
    /* TU_GMEM_NODEPTH=1: GMEM for render passes without a depth/stencil
     * attachment (full-screen post-processing passes).
     */
@@ -1522,6 +1538,7 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
           cmd->state.subpass->depth_stencil_attachment.attachment ==
              VK_ATTACHMENT_UNUSED) {
          cmd->state.rp.force_render_mode_reason = "TU_GMEM_NODEPTH";
+         tu_gmem_for_hits.fetch_add(1, std::memory_order_relaxed);
          return false;
       }
    }

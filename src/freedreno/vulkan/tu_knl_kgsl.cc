@@ -1989,13 +1989,20 @@ hanglog_thread(void *data)
    const int64_t threshold = 2000000000ll;
    mesa_logw("TU_HANGLOG: watchdog running (pid %d)", (int) getpid());
    {
-      const char *names[] = { "TU_DEBUG", "TU_SYNCHACK", "TU_HANGWAIT", "TU_GMEM_FOR",
-                              "TU_GMEM_NODEPTH", "TU_KGSL_PREEMPT", "TU_KGSL_CTX_TYPE",
-                              "TU_UAV_WFI", "IR3_SHADER_DEBUG" };
-      for (unsigned i = 0; i < ARRAY_SIZE(names); i++) {
-         const char *v = getenv(names[i]);
-         if (v)
-            mesa_logw("TU_HANGLOG: env %s=%s", names[i], v);
+      /* Only settings-like variables; nothing that could carry account data. */
+      static const char *prefixes[] = {
+         "TU_", "IR3_", "FD_", "MESA_", "FEX_", "DXVK_", "VKD3D_", "PROTON_",
+         "WINEESYNC", "WINEFSYNC", "WINE_DISABLE", "WINEDLLOVERRIDES",
+         "heap_memory_percent", "tu_", "vk_", "radv_", "ntsync", "DROIDDECK_",
+      };
+      extern char **environ;
+      for (char **e = environ; e && *e; e++) {
+         for (unsigned i = 0; i < ARRAY_SIZE(prefixes); i++) {
+            if (!strncmp(*e, prefixes[i], strlen(prefixes[i]))) {
+               mesa_logw("TU_HANGLOG: env %s", *e);
+               break;
+            }
+         }
       }
    }
 
