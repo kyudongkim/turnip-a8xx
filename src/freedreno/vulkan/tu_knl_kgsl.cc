@@ -1907,9 +1907,14 @@ hanglog_print_entry(const char *tag, uint32_t id)
       mesa_logw("TU_HANGLOG:   %s id %u: (not in ring)", tag, id);
       return;
    }
-   mesa_logw("TU_HANGLOG:   %s id %u: %s cmdbuf#%u rp%u idx%u uav=0x%x vs=%s fs=%s cs=%s "
+   const struct tu_hanglog_rpmode *m =
+      &tu_hanglog_rpmodes[tu_hanglog_rp_slot(e->cmd_seq, e->rp)];
+   const char *mode = (e->kind >= 3) ? "-" :
+      (m->cmd_seq == e->cmd_seq && m->rp == e->rp) ?
+         (m->mode == 1 ? "SYSMEM" : "GMEM") : "?";
+   mesa_logw("TU_HANGLOG:   %s id %u: %s cmdbuf#%u rp%u(%s) idx%u uav=0x%x vs=%s fs=%s cs=%s "
              "count=%u inst=%u area=%ux%u colors=%u fmt=%u depth=%u samples=%u",
-             tag, id, hanglog_kind_str(e->kind), e->cmd_seq, e->rp, e->idx,
+             tag, id, hanglog_kind_str(e->kind), e->cmd_seq, e->rp, mode, e->idx,
              e->uav_mask, e->vs, e->fs, e->cs, e->count, e->instances,
              e->w, e->h, e->ncolor, e->color_fmt, e->depth_fmt, e->samples);
 }
@@ -1983,6 +1988,16 @@ hanglog_thread(void *data)
    struct hanglog_qstate st[TU_MAX_QUEUE_FAMILIES][8] = {};
    const int64_t threshold = 2000000000ll;
    mesa_logw("TU_HANGLOG: watchdog running (pid %d)", (int) getpid());
+   {
+      const char *names[] = { "TU_DEBUG", "TU_SYNCHACK", "TU_HANGWAIT", "TU_GMEM_FOR",
+                              "TU_GMEM_NODEPTH", "TU_KGSL_PREEMPT", "TU_KGSL_CTX_TYPE",
+                              "TU_UAV_WFI", "IR3_SHADER_DEBUG" };
+      for (unsigned i = 0; i < ARRAY_SIZE(names); i++) {
+         const char *v = getenv(names[i]);
+         if (v)
+            mesa_logw("TU_HANGLOG: env %s=%s", names[i], v);
+      }
+   }
 
    while (!dev->hanglog_stop.load(std::memory_order_acquire)) {
       usleep(250 * 1000);

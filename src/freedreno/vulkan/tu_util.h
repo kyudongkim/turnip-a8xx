@@ -129,6 +129,19 @@ struct tu_hanglog_entry {
    uint16_t color_fmt, depth_fmt;
 };
 #define TU_HANGLOG_RING (1u << 16)
+struct tu_hanglog_rpmode {
+   uint32_t cmd_seq;
+   uint16_t rp;
+   uint8_t mode;  /* 1 sysmem, 2 gmem */
+   uint8_t pad;
+};
+#define TU_HANGLOG_RPRING 4096u
+extern struct tu_hanglog_rpmode tu_hanglog_rpmodes[TU_HANGLOG_RPRING];
+static inline uint32_t
+tu_hanglog_rp_slot(uint32_t seq, uint32_t rp)
+{
+   return (seq * 31u + rp) & (TU_HANGLOG_RPRING - 1);
+}
 extern bool tu_hanglog_enabled;
 extern struct tu_hanglog_entry tu_hanglog_ring[TU_HANGLOG_RING];
 uint32_t tu_hanglog_next_id(void);

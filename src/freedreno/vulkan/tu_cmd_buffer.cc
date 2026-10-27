@@ -4239,7 +4239,15 @@ tu_cmd_render(struct tu_cmd_buffer *cmd_buffer,
    tu_autotune::rp_key_opt rp_key = cmd_buffer->device->autotune->emit_preempt_latency_tracking_rp_hash(cmd_buffer);
 
    tu_autotune::rp_ctx_t rp_ctx = NULL;
-   if (use_sysmem_rendering(cmd_buffer, &rp_ctx, rp_key))
+   bool sysmem = use_sysmem_rendering(cmd_buffer, &rp_ctx, rp_key);
+   if (unlikely(tu_hanglog_enabled) && cmd_buffer->hanglog_seq) {
+      struct tu_hanglog_rpmode *m = &tu_hanglog_rpmodes[
+         tu_hanglog_rp_slot(cmd_buffer->hanglog_seq, cmd_buffer->hanglog_rp)];
+      m->cmd_seq = cmd_buffer->hanglog_seq;
+      m->rp = cmd_buffer->hanglog_rp;
+      m->mode = sysmem ? 1 : 2;
+   }
+   if (sysmem)
       tu_cmd_render_sysmem<CHIP>(cmd_buffer, rp_ctx);
    else
       tu_cmd_render_tiles<CHIP>(cmd_buffer, rp_ctx, fdm_offsets);

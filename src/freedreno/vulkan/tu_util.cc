@@ -79,6 +79,7 @@ os_file_notifier_t tu_debug_notifier;
 
 bool tu_hanglog_enabled;
 struct tu_hanglog_entry tu_hanglog_ring[TU_HANGLOG_RING];
+struct tu_hanglog_rpmode tu_hanglog_rpmodes[TU_HANGLOG_RPRING];
 static std::atomic<uint32_t> tu_hanglog_counter{1};
 uint32_t
 tu_hanglog_next_id(void)
