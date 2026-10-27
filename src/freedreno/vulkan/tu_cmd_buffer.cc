@@ -1505,6 +1505,26 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
       return false;
    }
 
+   if (cmd->state.rp.force_gmem_hack) {
+      cmd->state.rp.force_render_mode_reason = "TU_GMEM_FOR";
+      return false;
+   }
+
+   /* TU_GMEM_NODEPTH=1: GMEM for render passes without a depth/stencil
+    * attachment (full-screen post-processing passes).
+    */
+   {
+      static int nodepth = -1;
+      if (unlikely(nodepth < 0))
+         nodepth = debug_get_bool_option("TU_GMEM_NODEPTH", false);
+      if (nodepth && cmd->state.subpass &&
+          cmd->state.subpass->depth_stencil_attachment.attachment ==
+             VK_ATTACHMENT_UNUSED) {
+         cmd->state.rp.force_render_mode_reason = "TU_GMEM_NODEPTH";
+         return false;
+      }
+   }
+
    /* This is a case where it's better to avoid GMEM, too many tiles but no HW binning possible. */
    if (!vsc->binning_possible && vsc->binning_useful) {
       cmd->state.rp.force_render_mode_reason =
@@ -8647,6 +8667,24 @@ tu_flush_dynamic_input_attachments(struct tu_cmd_buffer *cmd)
    }
 }
 
+static bool
+tu_hash_prefix_match(const char *list, const struct tu_shader *sh)
+{
+   if (!list || !*list || !sh || !sh->variant)
+      return false;
+   const char *p = list;
+   while (*p) {
+      const char *e = strchr(p, ',');
+      size_t len = e ? (size_t)(e - p) : strlen(p);
+      if (len && !strncmp(sh->variant->blake3_str, p, len))
+         return true;
+      if (!e)
+         break;
+      p = e + 1;
+   }
+   return false;
+}
+
 static void
 tu_hanglog_fill_hash(char *dst, const struct tu_shader *sh)
 {
@@ -8834,6 +8872,17 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
             cmd->state.renderpass_cache.flush_bits |=
                TU_CMD_FLAG_WAIT_FOR_IDLE | TU_CMD_FLAG_WAIT_FOR_ME;
       }
+   }
+
+   /* TU_GMEM_FOR=<vs/fs blake3 prefix>[,...]: render passes containing such a
+    * draw are rendered in GMEM (tiled) mode instead of sysmem.
+    */
+   {
+      static const char *gf = os_get_option("TU_GMEM_FOR");
+      if (unlikely(gf && *gf) && !cmd->state.rp.force_gmem_hack &&
+          (tu_hash_prefix_match(gf, cmd->state.shaders[MESA_SHADER_VERTEX]) ||
+           tu_hash_prefix_match(gf, cmd->state.shaders[MESA_SHADER_FRAGMENT])))
+         cmd->state.rp.force_gmem_hack = true;
    }
 
    /* draw_count is 0 for indirect draws */

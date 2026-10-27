@@ -318,6 +318,7 @@ struct tu_tess_params {
  */
 struct tu_render_pass_state
 {
+   bool force_gmem_hack; /* TU_GMEM_FOR matched a draw in this render pass */
    bool xfb_used;
    bool has_tess;
    bool has_prim_generated_query_in_rp;
