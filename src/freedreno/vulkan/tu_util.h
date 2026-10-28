@@ -131,6 +131,10 @@ struct tu_hanglog_entry {
    const void *qpool;
    uint32_t qfirst, qcount, qflags;
    uint32_t qtype;
+   /* where the command was emitted: start iova of the cs chunk (= IB base
+    * when this chunk is executed as an IB) and dword offset in it */
+   uint64_t ib_start;
+   uint32_t ib_off;
 };
 #define TU_HANGLOG_RING (1u << 16)
 struct tu_hanglog_rpmode {

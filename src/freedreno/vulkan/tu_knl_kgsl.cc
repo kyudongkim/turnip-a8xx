@@ -2133,6 +2133,38 @@ hanglog_check_query_copy(struct tu_device *dev, uint32_t marker)
       tu_hanglog_dump_query_copy(dev, e, hanglog_print_entry);
 }
 
+
+/* Compact map of every marked command in a submit with the IB chunk it was
+ * emitted into, so a kernel fault report (IB1/IB2 base + remaining size) can
+ * be matched to a draw.
+ */
+static void
+hanglog_dump_ib_map(uint32_t ctx, uint32_t ts)
+{
+   const struct tu_hanglog_submit *hs = hanglog_find_submit(ctx, ts);
+   if (!hs)
+      return;
+   unsigned lines = 0;
+   for (uint32_t c = 0; c < hs->n && lines < 8000; c++) {
+      uint32_t first = hs->first[c], last = hs->last[c];
+      if (!first)
+         continue;
+      if (last - first >= TU_HANGLOG_RING)
+         first = last - TU_HANGLOG_RING + 1;
+      for (uint32_t id = first; id && id <= last && lines < 8000; id++) {
+         const struct tu_hanglog_entry *e = &tu_hanglog_ring[id & (TU_HANGLOG_RING - 1)];
+         if (e->id != id || e->cmd_seq != hs->seq[c])
+            continue;
+         mesa_logw("TU_HANGLOG: IBMAP ts %u id %u k%u #%u rp%u ib 0x%" PRIx64 "+0x%x vs=%s fs=%s cs=%s n=%u uav=0x%x",
+                   ts, id, e->kind, e->cmd_seq, e->rp, e->ib_start, e->ib_off * 4,
+                   e->kind <= 4 ? e->vs : "", e->kind <= 4 ? e->fs : "",
+                   e->kind <= 4 ? e->cs : "", e->kind <= 4 ? e->count : 0,
+                   e->kind <= 4 ? e->uav_mask : 0);
+         lines++;
+      }
+   }
+}
+
 static void
 hanglog_query_faults(struct tu_device *dev, uint32_t ctx)
 {
@@ -2326,6 +2358,7 @@ hanglog_thread(void *data)
                   s->last_fault_ts = f.timestamp;
                   hanglog_print_submit("fault-1", queue->msm_queue_id, f.timestamp - 1, 0, false);
                   hanglog_print_submit("FAULT", queue->msm_queue_id, f.timestamp, marker, true);
+                  hanglog_dump_ib_map(queue->msm_queue_id, f.timestamp);
                   hanglog_print_submit("fault+1", queue->msm_queue_id, f.timestamp + 1, marker, false);
                   hanglog_print_entry("marker", marker);
                   hanglog_check_query_copy(dev, marker);

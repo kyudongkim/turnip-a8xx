@@ -774,6 +774,16 @@ emit_rb_ccu_cntl(struct tu_cs *cs, struct tu_device *dev, bool gmem)
  * id too, so a stall can be placed relative to them.
  *   5 = CCU -> sysmem, 6 = CCU -> gmem, 7 = render sysmem, 8 = render gmem
  */
+
+static inline void
+tu_hanglog_record_ib(struct tu_hanglog_entry *e, const struct tu_cs *cs)
+{
+   uint64_t cur = tu_cs_get_cur_iova(cs);
+   uint32_t off = (uint32_t) (cs->cur - cs->start);
+   e->ib_start = cur ? cur - (uint64_t) off * 4 : 0;
+   e->ib_off = off;
+}
+
 static thread_local struct tu_hanglog_entry *tu_hanglog_last_event;
 
 static void
@@ -796,6 +806,7 @@ tu_hanglog_mark_event(struct tu_cmd_buffer *cmd, struct tu_cs *cs, uint8_t kind)
    tu_cs_emit_pkt7(cs, CP_MEM_WRITE, 3);
    tu_cs_emit_qw(cs, global_iova(cmd, hanglog_marker));
    tu_cs_emit(cs, id);
+   tu_hanglog_record_ib(e, cs);
 }
 
 /* TU_HANGLOG: marker at the start of non-draw commands (copies, barriers,
@@ -827,6 +838,7 @@ tu_hanglog_mark_cmd(struct tu_cmd_buffer *cmd, uint8_t kind)
    tu_cs_emit_pkt7(cs, CP_MEM_WRITE, 3);
    tu_cs_emit_qw(cs, global_iova(cmd, hanglog_marker));
    tu_cs_emit(cs, id);
+   tu_hanglog_record_ib(e, cs);
    return e;
 }
 
@@ -9133,6 +9145,7 @@ tu_hanglog_mark(struct tu_cmd_buffer *cmd, struct tu_cs *cs, uint8_t kind)
    tu_cs_emit_pkt7(cs, CP_MEM_WRITE, 3);
    tu_cs_emit_qw(cs, global_iova(cmd, hanglog_marker));
    tu_cs_emit(cs, id);
+   tu_hanglog_record_ib(e, cs);
 }
 
 template <chip CHIP>
