@@ -1494,6 +1494,7 @@ tu_CmdBeginQueryIndexedEXT(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmdbuf, commandBuffer);
    struct tu_hanglog_entry *hl = tu_hanglog_mark_cmd(cmdbuf, 28);
+   tu_rp_feat(cmdbuf, 1u << 4);
    VK_FROM_HANDLE(tu_query_pool, pool, queryPool);
    if (hl) {
       hl->qpool = pool;
@@ -2111,6 +2112,7 @@ tu_CmdEndQueryIndexedEXT(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmdbuf, commandBuffer);
    struct tu_hanglog_entry *hl = tu_hanglog_mark_cmd(cmdbuf, 29);
+   tu_rp_feat(cmdbuf, 1u << 4);
    VK_FROM_HANDLE(tu_query_pool, pool, queryPool);
    if (hl) {
       hl->qpool = pool;
@@ -2162,6 +2164,7 @@ tu_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
    struct tu_hanglog_entry *hl = tu_hanglog_mark_cmd(cmd, 30);
+   tu_rp_feat(cmd, 1u << 5);
    VK_FROM_HANDLE(tu_query_pool, pool, queryPool);
    if (hl) {
       hl->qpool = pool;

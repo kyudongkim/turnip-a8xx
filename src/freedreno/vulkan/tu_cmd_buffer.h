@@ -320,6 +320,7 @@ struct tu_render_pass_state
 {
    bool force_gmem_hack; /* TU_GMEM_FOR matched a draw in this render pass */
    bool split_pass; /* dynamic rendering pass with RESUMING/SUSPENDING parts */
+   uint32_t feat; /* TU_GMEM_FEAT bits: what this render pass contains */
    bool xfb_used;
    bool has_tess;
    bool has_prim_generated_query_in_rp;
@@ -1090,5 +1091,6 @@ tu_fdm_num_layers(const struct tu_cmd_buffer *cmd)
 }
 
 struct tu_hanglog_entry *tu_hanglog_mark_cmd(struct tu_cmd_buffer *cmd, uint8_t kind);
+void tu_rp_feat(struct tu_cmd_buffer *cmd, uint32_t bits);
 
 #endif /* TU_CMD_BUFFER_H */

@@ -2016,6 +2016,9 @@ hanglog_print_entry(const char *tag, uint32_t id)
              tag, id, hanglog_kind_str(e->kind), e->cmd_seq, e->rp, mode, e->idx,
              e->uav_mask, e->vs, e->fs, e->cs, e->count, e->instances,
              e->w, e->h, e->ncolor, e->color_fmt, e->depth_fmt, e->samples);
+   if (e->kind == 7 || e->kind == 8)
+      mesa_logw("TU_HANGLOG:   %s id %u:   pass feat 0x%x%s", tag, id,
+                e->qflags & 0x7fffffff, (e->qflags >> 31) ? " SPLIT" : "");
 }
 
 static long long

@@ -1523,6 +1523,53 @@ use_hw_binning(struct tu_cmd_buffer *cmd)
    return vsc->binning_possible && vsc->binning_useful;
 }
 
+enum {
+   TU_FEAT_VSUAV = 1u << 0,
+   TU_FEAT_FSUAV = 1u << 1,
+   TU_FEAT_MARKER = 1u << 2,
+   TU_FEAT_INDIRECT = 1u << 3,
+   TU_FEAT_QUERY = 1u << 4,
+   TU_FEAT_TIMESTAMP = 1u << 5,
+   TU_FEAT_BARRIER = 1u << 6,
+   TU_FEAT_DEPTHWRITE = 1u << 7,
+   TU_FEAT_BLEND = 1u << 8,
+   TU_FEAT_MANY = 1u << 9,
+   TU_FEAT_MSAA = 1u << 10,
+};
+
+static uint32_t
+tu_feat_parse(const char *v)
+{
+   static const struct { const char *n; uint32_t b; } names[] = {
+      { "vsuav", TU_FEAT_VSUAV }, { "fsuav", TU_FEAT_FSUAV },
+      { "marker", TU_FEAT_MARKER }, { "indirect", TU_FEAT_INDIRECT },
+      { "query", TU_FEAT_QUERY }, { "timestamp", TU_FEAT_TIMESTAMP },
+      { "barrier", TU_FEAT_BARRIER }, { "depthwrite", TU_FEAT_DEPTHWRITE },
+      { "blend", TU_FEAT_BLEND }, { "many", TU_FEAT_MANY },
+      { "msaa", TU_FEAT_MSAA },
+   };
+   uint32_t m = 0;
+   if (!v)
+      return 0;
+   char buf[256];
+   snprintf(buf, sizeof(buf), "%s", v);
+   for (char *save = NULL, *t = strtok_r(buf, ",", &save); t;
+        t = strtok_r(NULL, ",", &save))
+      for (unsigned i = 0; i < ARRAY_SIZE(names); i++)
+         if (!strcmp(t, names[i].n))
+            m |= names[i].b;
+   return m;
+}
+
+/* Record what a render pass contains (for TU_GMEM_FEAT/TU_GMEM_MERGED). */
+void
+tu_rp_feat(struct tu_cmd_buffer *cmd, uint32_t bits)
+{
+   if (cmd->state.pass)
+      cmd->state.rp.feat |= bits;
+}
+
+
 static bool
 use_sysmem_rendering(struct tu_cmd_buffer *cmd,
                      tu_autotune::rp_ctx_t *rp_ctx,
@@ -1613,8 +1660,15 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
       }
    }
 
-   if (cmd->state.rp.split_pass) {
-      static int mode = -1; /* 0 off, 1 all, 2 depth, 3 nodepth */
+   /* TU_GMEM_MERGED=1|depth|nodepth|<feature list>: GMEM for split passes
+    * (all / with depth / without depth / containing any listed feature).
+    * TU_GMEM_FEAT=<feature list>: GMEM for ANY pass containing a listed
+    * feature. Features: vsuav,fsuav,marker,indirect,query,timestamp,
+    * barrier,depthwrite,blend,many (>64 draws),msaa.
+    */
+   {
+      static int mode = -1; /* 0 off, 1 all, 2 depth, 3 nodepth, 4 features */
+      static uint32_t mmask = 0, fmask = 0;
       if (unlikely(mode < 0)) {
          const char *v = os_get_option("TU_GMEM_MERGED");
          if (!v || !*v || !strcmp(v, "0") || !strcmp(v, "false"))
@@ -1623,14 +1677,25 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
             mode = 2;
          else if (!strcmp(v, "nodepth"))
             mode = 3;
+         else if ((mmask = tu_feat_parse(v)))
+            mode = 4;
          else
             mode = 1;
+         fmask = tu_feat_parse(os_get_option("TU_GMEM_FEAT"));
       }
-      bool has_depth = cmd->state.subpass &&
-         cmd->state.subpass->depth_stencil_attachment.attachment !=
-            VK_ATTACHMENT_UNUSED;
-      if (mode == 1 || (mode == 2 && has_depth) || (mode == 3 && !has_depth)) {
-         cmd->state.rp.force_render_mode_reason = "TU_GMEM_MERGED";
+      if (cmd->state.rp.split_pass && mode) {
+         bool has_depth = cmd->state.subpass &&
+            cmd->state.subpass->depth_stencil_attachment.attachment !=
+               VK_ATTACHMENT_UNUSED;
+         if (mode == 1 || (mode == 2 && has_depth) || (mode == 3 && !has_depth) ||
+             (mode == 4 && (cmd->state.rp.feat & mmask))) {
+            cmd->state.rp.force_render_mode_reason = "TU_GMEM_MERGED";
+            tu_gmem_for_hits.fetch_add(1, std::memory_order_relaxed);
+            return false;
+         }
+      }
+      if (fmask && (cmd->state.rp.feat & fmask)) {
+         cmd->state.rp.force_render_mode_reason = "TU_GMEM_FEAT";
          tu_gmem_for_hits.fetch_add(1, std::memory_order_relaxed);
          return false;
       }
@@ -4405,6 +4470,7 @@ tu_cmd_render(struct tu_cmd_buffer *cmd_buffer,
          const struct tu_render_pass *pass = cmd_buffer->state.pass;
          const struct tu_subpass *sp = cmd_buffer->state.subpass;
          e->count = cmd_buffer->state.rp.drawcall_count;
+         e->qflags = cmd_buffer->state.rp.feat | (cmd_buffer->state.rp.split_pass ? 1u << 31 : 0);
          e->w = (uint16_t) MIN2(cmd_buffer->state.render_areas[0].extent.width, 65535u);
          e->h = (uint16_t) MIN2(cmd_buffer->state.render_areas[0].extent.height, 65535u);
          e->ncolor = (uint8_t) sp->color_count;
@@ -6619,6 +6685,7 @@ tu_render_pass_state_merge(struct tu_cmd_buffer *cmd, const struct tu_render_pas
    dst->disable_gmem |= src->disable_gmem;
    dst->force_gmem_hack |= src->force_gmem_hack;
    dst->split_pass |= src->split_pass;
+   dst->feat |= src->feat;
    dst->sysmem_single_prim_mode |= src->sysmem_single_prim_mode;
    dst->lrz_disable_for_next_rp |= src->lrz_disable_for_next_rp;
    dst->lrz_write_disabled |= src->lrz_write_disabled;
@@ -9148,6 +9215,29 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
          cmd->state.rp.force_gmem_hack = true;
    }
 
+   /* record pass features for TU_GMEM_FEAT / TU_GMEM_MERGED=<features> */
+   {
+      uint32_t f = 0;
+      for (unsigned s = MESA_SHADER_VERTEX; s <= MESA_SHADER_FRAGMENT; s++) {
+         const struct tu_shader *sh = cmd->state.shaders[s];
+         if (sh && sh->variant && sh->variant->has_ssbo)
+            f |= s == MESA_SHADER_FRAGMENT ? 1u << 1 : 1u << 0;
+      }
+      if (draw_count == 0)
+         f |= 1u << 3;
+      const struct vk_dynamic_graphics_state *ds = &cmd->vk.dynamic_graphics_state;
+      if (ds->ds.depth.test_enable && ds->ds.depth.write_enable)
+         f |= 1u << 7;
+      for (unsigned a = 0; a < ds->cb.attachment_count; a++)
+         if (ds->cb.attachments[a].blend_enable)
+            f |= 1u << 8;
+      if (ds->ms.rasterization_samples > 1)
+         f |= 1u << 10;
+      if (cmd->state.rp.drawcall_count > 64)
+         f |= 1u << 9;
+      cmd->state.rp.feat |= f;
+   }
+
    /* draw_count is 0 for indirect draws */
    if (unlikely(tu_env.synchack)) {
       const uint32_t h = tu_env.synchack;
@@ -11252,6 +11342,7 @@ tu_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd_buffer, commandBuffer);
    tu_hanglog_mark_cmd(cmd_buffer, 13);
+   tu_rp_feat(cmd_buffer, 1u << 6);
 
    tu_barrier(cmd_buffer, 1, pDependencyInfo, false);
 }
@@ -11461,6 +11552,7 @@ tu_CmdWriteBufferMarker2AMD(VkCommandBuffer commandBuffer,
       VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
 
    bool is_top_of_pipe = !(pipelineStage & ~top_of_pipe_flags);
+   tu_rp_feat(cmd, 1u << 2);
 
    /* TU_MARKER_INRP=memwrite: inside a render pass, write bottom-of-pipe
     * markers with WAIT_FOR_IDLE + CP_MEM_WRITE instead of an RB_DONE_TS
