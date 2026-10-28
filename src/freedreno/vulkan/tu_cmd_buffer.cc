@@ -9478,6 +9478,36 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
       tu_hanglog_mark<CHIP>(cmd, cs, draw_count == 0 ? 2 : 1);
    }
 
+   /* TU_DRAW_PAD=memwrite|nop|wmw|wfm: emit one extra CP packet before every
+    * draw (what TU_HANGLOG=1 does as a side effect, without the CPU logging).
+    *   memwrite: CP_MEM_WRITE of a dummy value to the global BO
+    *   nop:      CP_NOP of the same size
+    *   wmw:      CP_WAIT_MEM_WRITES
+    *   wfm:      CP_WAIT_FOR_ME
+    */
+   {
+      static int pad = -1;
+      if (unlikely(pad < 0)) {
+         const char *v = os_get_option("TU_DRAW_PAD");
+         pad = !v ? 0 : !strcmp(v, "memwrite") ? 1 : !strcmp(v, "nop") ? 2 :
+               !strcmp(v, "wmw") ? 3 : !strcmp(v, "wfm") ? 4 : 0;
+      }
+      if (pad == 1) {
+         tu_cs_emit_pkt7(cs, CP_MEM_WRITE, 3);
+         tu_cs_emit_qw(cs, global_iova(cmd, _pad_hanglog));
+         tu_cs_emit(cs, cmd->synchack_draws);
+      } else if (pad == 2) {
+         tu_cs_emit_pkt7(cs, CP_NOP, 3);
+         tu_cs_emit(cs, 0);
+         tu_cs_emit(cs, 0);
+         tu_cs_emit(cs, 0);
+      } else if (pad == 3) {
+         tu_cs_emit_pkt7(cs, CP_WAIT_MEM_WRITES, 0);
+      } else if (pad == 4) {
+         tu_cs_emit_pkt7(cs, CP_WAIT_FOR_ME, 0);
+      }
+   }
+
   if (BITSET_TEST(cmd->vk.dynamic_graphics_state.dirty,
                   MESA_VK_DYNAMIC_IA_PRIMITIVE_RESTART_ENABLE) ||
       BITSET_TEST(cmd->vk.dynamic_graphics_state.dirty,
