@@ -452,6 +452,7 @@ struct tu_device
    struct tu_cs_entry cmdbuf_QCTDD09112208_cmdbuf_start_cs_entry;
 
    struct tu_cs_entry bin_preamble_entry, bin_preamble_bv_entry;
+   struct tu_cs_entry sysmem_restore_entry; /* TU_SYSMEM_RESTORE */
 
    struct tu_cs_entry switch_away_amble_entry, switch_back_amble_entry;
 

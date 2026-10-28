@@ -2781,6 +2781,24 @@ tu_emit_bin_preamble(struct tu_device *dev, struct tu_cs *cs, bool bv)
    }
 }
 
+/* TU_SYSMEM_RESTORE=1|cond: preamble executed unconditionally when the GPU
+ * switches back to this context. Re-programs the sysmem CCU and VPC buffer
+ * layout (non-context registers that are otherwise only programmed on CCU
+ * mode changes). "cond" only does it when the CP is in sysmem render mode.
+ */
+template <chip CHIP>
+static void
+tu_emit_sysmem_restore(struct tu_device *dev, struct tu_cs *cs, bool cond)
+{
+   if (cond)
+      tu_cond_exec_start(cs, CP_COND_EXEC_0_RENDER_MODE_SYSMEM);
+   emit_rb_ccu_cntl<CHIP>(cs, dev, false);
+   emit_vpc_attr_buf<CHIP>(cs, dev, false);
+   if (cond)
+      tu_cond_exec_end(cs);
+}
+TU_GENX(tu_emit_sysmem_restore);
+
 VkResult
 tu_init_bin_preamble(struct tu_device *device)
 {
@@ -2801,6 +2819,20 @@ tu_init_bin_preamble(struct tu_device *device)
       TU_CALLX(device, tu_emit_bin_preamble)(device, &preamble_cs, true);
 
       device->bin_preamble_bv_entry = tu_cs_end_sub_stream(&device->sub_cs, &preamble_cs);
+   }
+
+   {
+      const char *sr = os_get_option("TU_SYSMEM_RESTORE");
+      if (sr && *sr && strcmp(sr, "0")) {
+         result = tu_cs_begin_sub_stream(&device->sub_cs, 256, &preamble_cs);
+         if (result != VK_SUCCESS)
+            return vk_startup_errorf(device->instance, result, "sysmem restore");
+         TU_CALLX(device, tu_emit_sysmem_restore)(device, &preamble_cs,
+                                                  !strcmp(sr, "cond"));
+         device->sysmem_restore_entry = tu_cs_end_sub_stream(&device->sub_cs, &preamble_cs);
+         mesa_logw("TU_SYSMEM_RESTORE: %s preamble, %u bytes", sr,
+                   device->sysmem_restore_entry.size);
+      }
    }
 
    uint32_t switch_away_size = device->autotune->get_switch_away_amble_size();
@@ -2952,6 +2984,11 @@ tu_init_hw(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
       tu_cs_emit_pkt7(cs, CP_SET_AMBLE, 3);
       tu_cs_emit_qw(cs, dev->switch_back_amble_entry.bo->iova + dev->switch_back_amble_entry.offset);
       tu_cs_emit(cs, CP_SET_AMBLE_2_DWORDS(dev->switch_back_amble_entry.size / sizeof(uint32_t)) |
+                        CP_SET_AMBLE_2_TYPE(PREAMBLE_AMBLE_TYPE));
+   } else if (dev->sysmem_restore_entry.size > 0) {
+      tu_cs_emit_pkt7(cs, CP_SET_AMBLE, 3);
+      tu_cs_emit_qw(cs, dev->sysmem_restore_entry.bo->iova + dev->sysmem_restore_entry.offset);
+      tu_cs_emit(cs, CP_SET_AMBLE_2_DWORDS(dev->sysmem_restore_entry.size / sizeof(uint32_t)) |
                         CP_SET_AMBLE_2_TYPE(PREAMBLE_AMBLE_TYPE));
    } else {
       tu_cs_emit_pkt7(cs, CP_SET_AMBLE, 3);
