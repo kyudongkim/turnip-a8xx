@@ -5344,7 +5344,7 @@ clear_sysmem_attachment(struct tu_cmd_buffer *cmd,
       if (force3d)
          ops = &r3d_ops<CHIP>;
    }
-   if (unlikely(tu_hanglog_enabled)) {
+   if (unlikely(tu_hanglog_enabled) && !tu_hanglog_lite) {
       uint32_t id = tu_hanglog_next_id();
       struct tu_hanglog_entry *e = &tu_hanglog_ring[id & (TU_HANGLOG_RING - 1)];
       memset(e, 0, sizeof(*e));

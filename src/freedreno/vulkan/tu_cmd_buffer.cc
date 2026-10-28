@@ -833,6 +833,10 @@ static thread_local struct tu_hanglog_entry *tu_hanglog_last_event;
 static void
 tu_hanglog_mark_event(struct tu_cmd_buffer *cmd, struct tu_cs *cs, uint8_t kind)
 {
+   if (tu_hanglog_lite) {
+      tu_hanglog_last_event = NULL;
+      return;
+   }
    uint32_t id = tu_hanglog_next_id();
    struct tu_hanglog_entry *e = &tu_hanglog_ring[id & (TU_HANGLOG_RING - 1)];
    tu_hanglog_last_event = e;
@@ -860,7 +864,7 @@ tu_hanglog_mark_event(struct tu_cmd_buffer *cmd, struct tu_cs *cs, uint8_t kind)
 struct tu_hanglog_entry *
 tu_hanglog_mark_cmd(struct tu_cmd_buffer *cmd, uint8_t kind)
 {
-   if (likely(!tu_hanglog_enabled))
+   if (likely(!tu_hanglog_enabled) || tu_hanglog_lite)
       return NULL;
    if (cmd->vk.level != VK_COMMAND_BUFFER_LEVEL_PRIMARY)
       return NULL;
@@ -9184,6 +9188,10 @@ template <chip CHIP>
 static void
 tu_hanglog_mark(struct tu_cmd_buffer *cmd, struct tu_cs *cs, uint8_t kind)
 {
+   if (tu_hanglog_lite) {
+      cmd->hanglog_last_draw = NULL;
+      return;
+   }
    if (!cmd->hanglog_seq)
       cmd->hanglog_seq = tu_hanglog_next_seq();
 

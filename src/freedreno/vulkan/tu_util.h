@@ -151,6 +151,7 @@ tu_hanglog_rp_slot(uint32_t seq, uint32_t rp)
    return (seq * 31u + rp) & (TU_HANGLOG_RPRING - 1);
 }
 extern bool tu_hanglog_enabled;
+extern bool tu_hanglog_lite; /* TU_HANGLOG=lite: fault polling only, no GPU markers */
 extern std::atomic<uint32_t> tu_gmem_for_hits;
 /* pass statistics: [split][sysmem] counts per feature mask (11 bits) */
 #define TU_FEAT_STATS 2048

@@ -79,6 +79,7 @@ const uint64_t tu_runtime_debug_flags =
 os_file_notifier_t tu_debug_notifier;
 
 bool tu_hanglog_enabled;
+bool tu_hanglog_lite;
 std::atomic<uint32_t> tu_gmem_for_hits{0};
 struct tu_hanglog_entry tu_hanglog_ring[TU_HANGLOG_RING];
 struct tu_hanglog_rpmode tu_hanglog_rpmodes[TU_HANGLOG_RPRING];
@@ -222,7 +223,11 @@ tu_env_init_once(void)
 {
    tu_env.start_debug = tu_env.debug = parse_debug_string(os_get_option("TU_DEBUG"), tu_debug_options);
    tu_env.synchack = (uint32_t) parse_debug_string(os_get_option("TU_SYNCHACK"), tu_synchack_options);
-   tu_hanglog_enabled = debug_get_bool_option("TU_HANGLOG", false);
+   {
+      const char *hl = os_get_option("TU_HANGLOG");
+      tu_hanglog_lite = hl && !strcmp(hl, "lite");
+      tu_hanglog_enabled = tu_hanglog_lite || debug_get_bool_option("TU_HANGLOG", false);
+   }
    if (tu_env.synchack)
       mesa_logi("TU_SYNCHACK=0x%x", tu_env.synchack);
 
