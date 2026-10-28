@@ -308,6 +308,12 @@ tu_query_pool_destroy(struct tu_device *device, struct tu_query_pool *pool,
       fd_release_derived_counter_collection(device->perfcntrs, collection);
    }
 
+   if (pool->hl_write_id || pool->hl_reset_id) {
+      tu_hanglog_pool_unregister(pool);
+      free(pool->hl_write_id);
+      free(pool->hl_reset_id);
+      pool->hl_write_id = pool->hl_reset_id = NULL;
+   }
    if (pool->bo)
       tu_bo_finish(device, pool->bo);
    vk_query_pool_destroy(&device->vk, pAllocator, &pool->vk);
@@ -482,6 +488,12 @@ tu_CreateQueryPool(VkDevice _device,
 
    pool->size = pCreateInfo->queryCount;
    pool->query_stride = slot_size;
+
+   if (unlikely(tu_hanglog_enabled)) {
+      pool->hl_write_id = (uint32_t *) calloc(pool->size, sizeof(uint32_t));
+      pool->hl_reset_id = (uint32_t *) calloc(pool->size, sizeof(uint32_t));
+      tu_hanglog_pool_register(pool);
+   }
 
    TU_RMV(query_pool_create, device, pool);
 
@@ -959,9 +971,27 @@ tu_CmdCopyQueryPoolResults(VkCommandBuffer commandBuffer,
                            VkQueryResultFlags flags)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmdbuf, commandBuffer);
-   tu_hanglog_mark_cmd(cmdbuf, 31);
+   struct tu_hanglog_entry *hl = tu_hanglog_mark_cmd(cmdbuf, 31);
    VK_FROM_HANDLE(tu_query_pool, pool, queryPool);
    VK_FROM_HANDLE(tu_buffer, buffer, dstBuffer);
+   if (hl) {
+      hl->qpool = pool;
+      hl->qfirst = firstQuery;
+      hl->qcount = queryCount;
+      hl->qflags = flags;
+      hl->qtype = pool->vk.query_type;
+   }
+   /* TU_QUERY_NOWAIT=1: ignore VK_QUERY_RESULT_WAIT_BIT on the GPU, so a
+    * query that never becomes available cannot hang the GPU forever.
+    * Unavailable results are simply not copied.
+    */
+   {
+      static int nowait = -1;
+      if (unlikely(nowait < 0))
+         nowait = debug_get_bool_option("TU_QUERY_NOWAIT", false);
+      if (nowait)
+         flags &= ~VK_QUERY_RESULT_WAIT_BIT;
+   }
    struct tu_cs *cs = &cmdbuf->cs;
    assert(firstQuery + queryCount <= pool->size);
 
@@ -1050,8 +1080,17 @@ tu_CmdResetQueryPool(VkCommandBuffer commandBuffer,
                      uint32_t queryCount)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmdbuf, commandBuffer);
-   tu_hanglog_mark_cmd(cmdbuf, 27);
+   struct tu_hanglog_entry *hl = tu_hanglog_mark_cmd(cmdbuf, 27);
    VK_FROM_HANDLE(tu_query_pool, pool, queryPool);
+   if (hl) {
+      hl->qpool = pool;
+      hl->qfirst = firstQuery;
+      hl->qcount = queryCount;
+      hl->qtype = pool->vk.query_type;
+      if (pool->hl_reset_id)
+         for (uint32_t i = 0; i < queryCount && firstQuery + i < pool->size; i++)
+            pool->hl_reset_id[firstQuery + i] = hl->id;
+   }
 
    switch (pool->vk.query_type) {
    case VK_QUERY_TYPE_TIMESTAMP:
@@ -1454,8 +1493,14 @@ tu_CmdBeginQueryIndexedEXT(VkCommandBuffer commandBuffer,
                            uint32_t index)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmdbuf, commandBuffer);
-   tu_hanglog_mark_cmd(cmdbuf, 28);
+   struct tu_hanglog_entry *hl = tu_hanglog_mark_cmd(cmdbuf, 28);
    VK_FROM_HANDLE(tu_query_pool, pool, queryPool);
+   if (hl) {
+      hl->qpool = pool;
+      hl->qfirst = query;
+      hl->qcount = 1;
+      hl->qtype = pool->vk.query_type;
+   }
    assert(query < pool->size);
 
    switch (pool->vk.query_type) {
@@ -2065,8 +2110,16 @@ tu_CmdEndQueryIndexedEXT(VkCommandBuffer commandBuffer,
                          uint32_t index)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmdbuf, commandBuffer);
-   tu_hanglog_mark_cmd(cmdbuf, 29);
+   struct tu_hanglog_entry *hl = tu_hanglog_mark_cmd(cmdbuf, 29);
    VK_FROM_HANDLE(tu_query_pool, pool, queryPool);
+   if (hl) {
+      hl->qpool = pool;
+      hl->qfirst = query;
+      hl->qcount = 1;
+      hl->qtype = pool->vk.query_type;
+      if (pool->hl_write_id && query < pool->size)
+         pool->hl_write_id[query] = hl->id;
+   }
    assert(query < pool->size);
 
    switch (pool->vk.query_type) {
@@ -2108,8 +2161,16 @@ tu_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
                       uint32_t query)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
-   tu_hanglog_mark_cmd(cmd, 30);
+   struct tu_hanglog_entry *hl = tu_hanglog_mark_cmd(cmd, 30);
    VK_FROM_HANDLE(tu_query_pool, pool, queryPool);
+   if (hl) {
+      hl->qpool = pool;
+      hl->qfirst = query;
+      hl->qcount = 1;
+      hl->qtype = pool->vk.query_type;
+      if (pool->hl_write_id && query < pool->size)
+         pool->hl_write_id[query] = hl->id;
+   }
 
    /* Inside a render pass, just write the timestamp multiple times so that
     * the user gets the last one if we use GMEM. There isn't really much
@@ -2368,4 +2429,41 @@ tu_ReleaseProfilingLockKHR(VkDevice device)
 {
    /* TODO. Probably there's something to do for kgsl. */
    return;
+}
+
+void
+tu_hanglog_dump_query_copy(struct tu_device *dev,
+                           const struct tu_hanglog_entry *e,
+                           void (*print_entry)(const char *tag, uint32_t id))
+{
+   struct tu_query_pool *pool = (struct tu_query_pool *) e->qpool;
+   mesa_logw("TU_HANGLOG:   query copy: pool %p type %u first %u count %u flags 0x%x%s",
+             (void *) pool, e->qtype, e->qfirst, e->qcount, e->qflags,
+             (e->qflags & VK_QUERY_RESULT_WAIT_BIT) ? " (WAIT)" : "");
+   if (!pool || !tu_hanglog_pool_alive(pool)) {
+      mesa_logw("TU_HANGLOG:   query pool no longer alive");
+      return;
+   }
+   tu_bo_sync_cache(dev, pool->bo, 0, pool->bo->size, TU_MEM_SYNC_CACHE_FROM_GPU);
+   unsigned shown = 0, unavail = 0;
+   for (uint32_t i = 0; i < e->qcount && e->qfirst + i < pool->size; i++) {
+      uint32_t q = e->qfirst + i;
+      struct query_slot *slot = slot_address(pool, q);
+      uint64_t avail = p_atomic_read(&slot->available);
+      if (avail == 1)
+         continue;
+      unavail++;
+      if (shown >= 8)
+         continue;
+      shown++;
+      uint32_t w = pool->hl_write_id ? pool->hl_write_id[q] : 0;
+      uint32_t r = pool->hl_reset_id ? pool->hl_reset_id[q] : 0;
+      mesa_logw("TU_HANGLOG:   query %u NOT AVAILABLE (available=%" PRIu64 "), last recorded write id %u, last recorded reset id %u%s",
+                q, avail, w, r, (w && r && r > w) ? "  (reset recorded AFTER last write)" : (!w ? "  (never written)" : ""));
+      if (w)
+         print_entry("      last-write", w);
+      if (r)
+         print_entry("      last-reset", r);
+   }
+   mesa_logw("TU_HANGLOG:   query copy: %u of %u queries unavailable right now", unavail, e->qcount);
 }

@@ -89,6 +89,38 @@ struct tu_hanglog_submit tu_hanglog_submits[TU_HANGLOG_SUBMIT_RING];
 thread_local struct tu_hanglog_submit tu_hanglog_pending;
 struct tu_hanglog_bo tu_hanglog_bos[TU_HANGLOG_BO_RING];
 
+#define TU_HANGLOG_POOLS 4096
+static std::atomic<const void *> tu_hanglog_pools[TU_HANGLOG_POOLS];
+
+void
+tu_hanglog_pool_register(const void *pool)
+{
+   for (unsigned i = 0; i < TU_HANGLOG_POOLS; i++) {
+      const void *expected = NULL;
+      if (tu_hanglog_pools[i].compare_exchange_strong(expected, pool))
+         return;
+   }
+}
+
+void
+tu_hanglog_pool_unregister(const void *pool)
+{
+   for (unsigned i = 0; i < TU_HANGLOG_POOLS; i++) {
+      const void *expected = pool;
+      if (tu_hanglog_pools[i].compare_exchange_strong(expected, NULL))
+         return;
+   }
+}
+
+bool
+tu_hanglog_pool_alive(const void *pool)
+{
+   for (unsigned i = 0; i < TU_HANGLOG_POOLS; i++)
+      if (tu_hanglog_pools[i].load(std::memory_order_relaxed) == pool)
+         return true;
+   return false;
+}
+
 uint32_t
 tu_hanglog_next_seq(void)
 {

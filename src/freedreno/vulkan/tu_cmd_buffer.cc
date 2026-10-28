@@ -802,13 +802,13 @@ tu_hanglog_mark_event(struct tu_cmd_buffer *cmd, struct tu_cs *cs, uint8_t kind)
  * events, queries, ...) and at command buffer begin/end, so a stall inside a
  * command buffer without draws can be located. Kinds 11..35.
  */
-void
+struct tu_hanglog_entry *
 tu_hanglog_mark_cmd(struct tu_cmd_buffer *cmd, uint8_t kind)
 {
    if (likely(!tu_hanglog_enabled))
-      return;
+      return NULL;
    if (cmd->vk.level != VK_COMMAND_BUFFER_LEVEL_PRIMARY)
-      return;
+      return NULL;
    struct tu_cs *cs = cmd->state.pass ? &cmd->draw_cs : &cmd->cs;
    if (!cmd->hanglog_seq)
       cmd->hanglog_seq = tu_hanglog_next_seq();
@@ -827,6 +827,7 @@ tu_hanglog_mark_cmd(struct tu_cmd_buffer *cmd, uint8_t kind)
    tu_cs_emit_pkt7(cs, CP_MEM_WRITE, 3);
    tu_cs_emit_qw(cs, global_iova(cmd, hanglog_marker));
    tu_cs_emit(cs, id);
+   return e;
 }
 
 static bool

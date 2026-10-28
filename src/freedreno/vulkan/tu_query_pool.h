@@ -54,6 +54,10 @@ struct tu_query_pool
    uint32_t query_stride;
    struct tu_bo *bo;
 
+   /* TU_HANGLOG: last recorded marker id that wrote availability / reset */
+   uint32_t *hl_write_id;
+   uint32_t *hl_reset_id;
+
    /* For performance query */
    enum tu_perf_query_type perf_query_type;
    union {
@@ -64,5 +68,10 @@ struct tu_query_pool
 
 VK_DEFINE_NONDISP_HANDLE_CASTS(tu_query_pool, vk.base, VkQueryPool,
                                VK_OBJECT_TYPE_QUERY_POOL)
+
+struct tu_hanglog_entry;
+void tu_hanglog_dump_query_copy(struct tu_device *dev,
+                                const struct tu_hanglog_entry *e,
+                                void (*print_entry)(const char *tag, uint32_t id));
 
 #endif /* TU_QUERY_POOL_H */

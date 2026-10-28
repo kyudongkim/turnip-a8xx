@@ -34,6 +34,7 @@
 #include "tu_dynamic_rendering.h"
 #include "tu_knl.h"
 #include "tu_queue.h"
+#include "tu_query_pool.h"
 #include "tu_rmv.h"
 
 /* ION_HEAP(ION_SYSTEM_HEAP_ID) */
@@ -1993,6 +1994,20 @@ hanglog_print_entry(const char *tag, uint32_t id)
    }
    const struct tu_hanglog_rpmode *m =
       &tu_hanglog_rpmodes[tu_hanglog_rp_slot(e->cmd_seq, e->rp)];
+   if (e->kind >= 11) {
+      const char *rpmode = (m->cmd_seq == e->cmd_seq && m->rp == e->rp) ?
+         (m->mode == 1 ? "SYSMEM" : "GMEM") : "?";
+      if (e->qpool)
+         mesa_logw("TU_HANGLOG:   %s id %u: %s cmdbuf#%u rp%u idx%u %s%s pool %p type %u q %u+%u flags 0x%x",
+                   tag, id, hanglog_kind_str(e->kind), e->cmd_seq, e->rp, e->idx,
+                   e->count ? "INSIDE-RP:" : "outside-rp", e->count ? rpmode : "",
+                   e->qpool, e->qtype, e->qfirst, e->qcount, e->qflags);
+      else
+         mesa_logw("TU_HANGLOG:   %s id %u: %s cmdbuf#%u rp%u idx%u %s%s",
+                   tag, id, hanglog_kind_str(e->kind), e->cmd_seq, e->rp, e->idx,
+                   e->count ? "INSIDE-RP:" : "outside-rp", e->count ? rpmode : "");
+      return;
+   }
    const char *mode = (e->kind >= 3) ? "-" :
       (m->cmd_seq == e->cmd_seq && m->rp == e->rp) ?
          (m->mode == 1 ? "SYSMEM" : "GMEM") : "?";
@@ -2104,6 +2119,15 @@ hanglog_print_submit(const char *tag, uint32_t ctx, uint32_t ts,
          tail++;
       }
    }
+}
+
+static void
+hanglog_check_query_copy(struct tu_device *dev, uint32_t marker)
+{
+   const struct tu_hanglog_entry *e =
+      &tu_hanglog_ring[marker & (TU_HANGLOG_RING - 1)];
+   if (e->id == marker && e->kind == 31)
+      tu_hanglog_dump_query_copy(dev, e, hanglog_print_entry);
 }
 
 static void
@@ -2276,6 +2300,7 @@ hanglog_thread(void *data)
                   hanglog_print_submit("FAULT", queue->msm_queue_id, f.timestamp, marker, true);
                   hanglog_print_submit("fault+1", queue->msm_queue_id, f.timestamp + 1, marker, false);
                   hanglog_print_entry("marker", marker);
+                  hanglog_check_query_copy(dev, marker);
                   hanglog_query_faults(dev, queue->msm_queue_id);
                }
             }
@@ -2309,6 +2334,7 @@ hanglog_thread(void *data)
                   if (marker > (uint32_t) k)
                      hanglog_print_entry("before", marker - k);
                hanglog_print_entry("AT", marker);
+               hanglog_check_query_copy(dev, marker);
                hanglog_query_faults(dev, queue->msm_queue_id);
                hanglog_print_submit("retired", queue->msm_queue_id, rd.timestamp, marker, false);
                hanglog_print_submit("STUCK", queue->msm_queue_id, rd.timestamp + 1, marker, true);

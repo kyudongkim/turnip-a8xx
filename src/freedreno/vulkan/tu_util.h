@@ -127,6 +127,10 @@ struct tu_hanglog_entry {
    uint16_t w, h;
    uint8_t ncolor, samples;
    uint16_t color_fmt, depth_fmt;
+   /* query commands */
+   const void *qpool;
+   uint32_t qfirst, qcount, qflags;
+   uint32_t qtype;
 };
 #define TU_HANGLOG_RING (1u << 16)
 struct tu_hanglog_rpmode {
@@ -147,6 +151,9 @@ extern std::atomic<uint32_t> tu_gmem_for_hits;
 extern struct tu_hanglog_entry tu_hanglog_ring[TU_HANGLOG_RING];
 uint32_t tu_hanglog_next_id(void);
 uint32_t tu_hanglog_next_seq(void);
+void tu_hanglog_pool_register(const void *pool);
+void tu_hanglog_pool_unregister(const void *pool);
+bool tu_hanglog_pool_alive(const void *pool);
 
 /* Per-submit record: which command buffers went into kgsl timestamp ts. */
 #define TU_HANGLOG_SUBMIT_MAX 24
