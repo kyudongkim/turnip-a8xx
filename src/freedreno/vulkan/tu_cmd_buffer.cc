@@ -673,6 +673,18 @@ emit_vpc_attr_buf(struct tu_cs *cs, struct tu_device *dev, bool gmem)
    if (!dev->physical_device->info->props.has_gmem_vpc_attr_buf)
       return;
 
+   /* TU_SYSMEM_VPC_GMEM=1: program the GMEM-mode VPC attribute/position
+    * buffer layout in sysmem mode too, so it matches what the BV bin
+    * preamble programs on thread syncs.
+    */
+   {
+      static int vg = -1;
+      if (unlikely(vg < 0))
+         vg = debug_get_bool_option("TU_SYSMEM_VPC_GMEM", false);
+      if (vg)
+         gmem = true;
+   }
+
    tu_crb crb(cs, 9);
 
    const struct fd6_gmem_config *cfg = gmem ?
@@ -2746,7 +2758,17 @@ tu_emit_bin_preamble(struct tu_device *dev, struct tu_cs *cs, bool bv)
 
    if (!bv)
       emit_rb_ccu_cntl<CHIP>(cs, dev, true);
-   emit_vpc_attr_buf<CHIP>(cs, dev, true);
+   /* TU_PREAMBLE_NOVPC=1: don't touch the VPC buffer layout from the bin
+    * preambles (the BV one runs on every thread sync, also in sysmem).
+    * TU_PREAMBLE_NOVPC=bv: only skip it in the BV preamble.
+    */
+   {
+      const char *nv = os_get_option("TU_PREAMBLE_NOVPC");
+      bool skip = nv && *nv && strcmp(nv, "0") &&
+                  (strcmp(nv, "bv") || bv);
+      if (!skip)
+         emit_vpc_attr_buf<CHIP>(cs, dev, true);
+   }
 
    if (CHIP >= A7XX && !bv) {
       tu7_emit_tile_render_begin_regs<CHIP>(cs);
