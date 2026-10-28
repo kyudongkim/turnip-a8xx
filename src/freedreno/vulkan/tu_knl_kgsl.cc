@@ -2003,6 +2003,14 @@ hanglog_print_entry(const char *tag, uint32_t id)
              e->w, e->h, e->ncolor, e->color_fmt, e->depth_fmt, e->samples);
 }
 
+static long long
+hanglog_wall_ms(void)
+{
+   struct timespec ts;
+   clock_gettime(CLOCK_REALTIME, &ts);
+   return (long long) ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
 static void
 hanglog_lookup_addr(uint64_t addr)
 {
@@ -2197,13 +2205,33 @@ hanglog_thread(void *data)
    }
 
    bool lost_reported = false;
+   int64_t last_beat = 0;
    while (!dev->hanglog_stop.load(std::memory_order_acquire)) {
       usleep(250 * 1000);
       int64_t now = os_time_get_nano();
+      if (now - last_beat > 10ll * 1000000000ll) {
+         last_beat = now;
+         for (unsigned i = 0; i < TU_MAX_QUEUE_FAMILIES; i++)
+            for (int q = 0; q < MIN2(dev->queue_count[i], 8); q++) {
+               struct tu_queue *queue = &dev->queues[i][q];
+               if (vk_queue_is_emulated(&queue->vk) ||
+                   !queue->hanglog_has_submit.load(std::memory_order_acquire))
+                  continue;
+               struct kgsl_cmdstream_readtimestamp_ctxtid r = {
+                  .context_id = queue->msm_queue_id,
+                  .type = KGSL_TIMESTAMP_RETIRED,
+               };
+               safe_ioctl(dev->fd, IOCTL_KGSL_CMDSTREAM_READTIMESTAMP_CTXTID, &r);
+               mesa_logw("TU_HANGLOG: t=%lld beat ctx %u retired %u submitted %u marker %u",
+                         hanglog_wall_ms(), queue->msm_queue_id, r.timestamp,
+                         queue->hanglog_last_ts.load(std::memory_order_relaxed),
+                         dev->global_bo_map->hanglog_marker);
+            }
+      }
       if (!lost_reported && vk_device_is_lost_no_report(&dev->vk)) {
          lost_reported = true;
          uint32_t marker = dev->global_bo_map->hanglog_marker;
-         mesa_logw("TU_HANGLOG: DEVICE LOST reported to the app; CP marker %u", marker);
+         mesa_logw("TU_HANGLOG: t=%lld DEVICE LOST reported to the app; CP marker %u", hanglog_wall_ms(), marker);
          for (int k = 12; k >= 1; k--)
             if (marker > (uint32_t) k)
                hanglog_print_entry("before", marker - k);
@@ -2239,8 +2267,8 @@ hanglog_thread(void *data)
                   };
                   safe_ioctl(dev->fd, IOCTL_KGSL_CMDSTREAM_READTIMESTAMP_CTXTID, &r0);
                   uint32_t marker = dev->global_bo_map->hanglog_marker;
-                  mesa_logw("TU_HANGLOG: ctx %u NEW KERNEL FAULT: count %d -> %d, fault ts %u (retired %u, submitted %u, CP marker %u)",
-                            queue->msm_queue_id, s->last_faults, f.faults,
+                  mesa_logw("TU_HANGLOG: t=%lld ctx %u NEW KERNEL FAULT: count %d -> %d, fault ts %u (retired %u, submitted %u, CP marker %u)",
+                            hanglog_wall_ms(), queue->msm_queue_id, s->last_faults, f.faults,
                             f.timestamp, r0.timestamp, submitted, marker);
                   s->last_faults = f.faults;
                   s->last_fault_ts = f.timestamp;
@@ -2260,8 +2288,8 @@ hanglog_thread(void *data)
             bool idle = timestamp_cmp(rd.timestamp, submitted);
             if (idle || rd.timestamp != s->last_retired) {
                if (s->reported) {
-                  mesa_logw("TU_HANGLOG: ctx %u RESUMED after %.1f s (retired %u, submitted %u, marker %u)",
-                            queue->msm_queue_id, (now - s->since_ns) / 1e9,
+                  mesa_logw("TU_HANGLOG: t=%lld ctx %u RESUMED after %.1f s (retired %u, submitted %u, marker %u)",
+                            hanglog_wall_ms(), queue->msm_queue_id, (now - s->since_ns) / 1e9,
                             rd.timestamp, submitted, dev->global_bo_map->hanglog_marker);
                   hanglog_query_faults(dev, queue->msm_queue_id);
                }
@@ -2273,8 +2301,8 @@ hanglog_thread(void *data)
             if (!s->reported && now - s->since_ns > threshold) {
                s->reported = true;
                uint32_t marker = dev->global_bo_map->hanglog_marker;
-               mesa_logw("TU_HANGLOG: ctx %u STALLED %.1f s: retired ts %u, submitted ts %u, CP marker %u (GMEM_FOR passes so far: %u)",
-                         queue->msm_queue_id, (now - s->since_ns) / 1e9,
+               mesa_logw("TU_HANGLOG: t=%lld ctx %u STALLED %.1f s: retired ts %u, submitted ts %u, CP marker %u (GMEM_FOR passes so far: %u)",
+                         hanglog_wall_ms(), queue->msm_queue_id, (now - s->since_ns) / 1e9,
                          rd.timestamp, submitted, marker,
                          tu_gmem_for_hits.load(std::memory_order_relaxed));
                for (int k = 12; k >= 1; k--)
