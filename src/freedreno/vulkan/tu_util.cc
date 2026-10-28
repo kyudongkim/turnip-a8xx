@@ -215,6 +215,16 @@ static const struct debug_control tu_synchack_options[] = {
    { "uavvs", TU_SYNCHACK_UAVVS },
    { "uavnext", TU_SYNCHACK_UAVNEXT },
    { "first", TU_SYNCHACK_FIRST },
+   { "vbo", TU_SYNCHACK_VBO },
+   { "desc", TU_SYNCHACK_DESC },
+   { "const", TU_SYNCHACK_CONST },
+   { "vsp", TU_SYNCHACK_VSP },
+   { "vs", TU_SYNCHACK_VS },
+   { "fs", TU_SYNCHACK_FS },
+   { "ds", TU_SYNCHACK_DS },
+   { "dyn", TU_SYNCHACK_DYN },
+   { "ib", TU_SYNCHACK_IB },
+   { "clean", TU_SYNCHACK_CLEAN },
    { NULL, 0 }
 };
 

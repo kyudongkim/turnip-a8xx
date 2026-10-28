@@ -712,6 +712,7 @@ struct tu_cmd_buffer
    /* enum tu_synchack_ctx: which kind of command the next flush belongs to */
    uint8_t synchack_ctx;
    bool synchack_prev_uav;
+   uint64_t synchack_prev_index_va;
    uint32_t hanglog_seq;
    uint32_t hanglog_first_id, hanglog_last_id;
    struct tu_hanglog_entry *hanglog_last_draw;

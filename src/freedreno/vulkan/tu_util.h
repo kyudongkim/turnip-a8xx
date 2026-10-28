@@ -100,6 +100,16 @@ enum tu_synchack_flags {
    TU_SYNCHACK_UAVVS = 1u << 12, /* draws whose VS/TCS/TES/GS uses UAV */
    TU_SYNCHACK_UAVNEXT = 1u << 13, /* the draw right after a UAV draw */
    TU_SYNCHACK_FIRST = 1u << 14, /* first draw of each command buffer */
+   TU_SYNCHACK_VBO   = 1u << 15, /* vertex buffers changed */
+   TU_SYNCHACK_DESC  = 1u << 16, /* graphics descriptor sets changed */
+   TU_SYNCHACK_CONST = 1u << 17, /* shader constants (push consts etc.) changed */
+   TU_SYNCHACK_VSP   = 1u << 18, /* VS params (base vertex/instance) changed */
+   TU_SYNCHACK_VS    = 1u << 19, /* VS changed */
+   TU_SYNCHACK_FS    = 1u << 20, /* FS changed */
+   TU_SYNCHACK_DS    = 1u << 21, /* any draw state group dirty */
+   TU_SYNCHACK_DYN   = 1u << 22, /* any dynamic graphics state dirty */
+   TU_SYNCHACK_IB    = 1u << 23, /* index buffer changed */
+   TU_SYNCHACK_CLEAN = 1u << 24, /* draws with nothing dirty */
 };
 
 enum tu_synchack_ctx {

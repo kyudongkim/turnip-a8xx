@@ -9441,6 +9441,32 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
       cmd->synchack_prev_uav = uav_fs || uav_geom;
       if ((h & TU_SYNCHACK_FIRST) && cmd->synchack_draws == 0)
          hit = true;
+      {
+         const uint32_t d = cmd->state.dirty;
+         bool dyn = !BITSET_IS_EMPTY(cmd->vk.dynamic_graphics_state.dirty);
+         bool ib_changed = cmd->state.index_va != cmd->synchack_prev_index_va;
+         cmd->synchack_prev_index_va = cmd->state.index_va;
+         if ((h & TU_SYNCHACK_VBO) && (d & TU_CMD_DIRTY_VERTEX_BUFFERS))
+            hit = true;
+         if ((h & TU_SYNCHACK_DESC) && (d & TU_CMD_DIRTY_DESC_SETS))
+            hit = true;
+         if ((h & TU_SYNCHACK_CONST) && (d & TU_CMD_DIRTY_SHADER_CONSTS))
+            hit = true;
+         if ((h & TU_SYNCHACK_VSP) && (d & TU_CMD_DIRTY_VS_PARAMS))
+            hit = true;
+         if ((h & TU_SYNCHACK_VS) && (d & TU_CMD_DIRTY_VS))
+            hit = true;
+         if ((h & TU_SYNCHACK_FS) && (d & TU_CMD_DIRTY_FS))
+            hit = true;
+         if ((h & TU_SYNCHACK_DS) && (d & TU_CMD_DIRTY_DRAW_STATE))
+            hit = true;
+         if ((h & TU_SYNCHACK_DYN) && dyn)
+            hit = true;
+         if ((h & TU_SYNCHACK_IB) && ib_changed)
+            hit = true;
+         if ((h & TU_SYNCHACK_CLEAN) && !d && !dyn && !ib_changed)
+            hit = true;
+      }
       cmd->synchack_ctx = hit ? TU_SYNCHACK_CTX_FORCE : TU_SYNCHACK_CTX_NOWAIT;
    }
    tu_emit_cache_flush_renderpass<CHIP>(cmd);
