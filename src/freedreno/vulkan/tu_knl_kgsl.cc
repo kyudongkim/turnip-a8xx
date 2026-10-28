@@ -1950,7 +1950,7 @@ hanglog_print_entry(const char *tag, uint32_t id)
       (m->cmd_seq == e->cmd_seq && m->rp == e->rp) ?
          (m->mode == 1 ? "SYSMEM" : "GMEM") : "?";
    mesa_logw("TU_HANGLOG:   %s id %u: %s cmdbuf#%u rp%u(%s) idx%u uav=0x%x vs=%s fs=%s cs=%s "
-             "count=%u inst=%u area=%ux%u colors=%u fmt=%u depth=%u samples=%u",
+             "count=%u inst=0x%x area=%ux%u colors=%u fmt=%u depth=%u samples=%u",
              tag, id, hanglog_kind_str(e->kind), e->cmd_seq, e->rp, mode, e->idx,
              e->uav_mask, e->vs, e->fs, e->cs, e->count, e->instances,
              e->w, e->h, e->ncolor, e->color_fmt, e->depth_fmt, e->samples);

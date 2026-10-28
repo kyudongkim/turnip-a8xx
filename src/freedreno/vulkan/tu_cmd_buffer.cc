@@ -774,11 +774,14 @@ emit_rb_ccu_cntl(struct tu_cs *cs, struct tu_device *dev, bool gmem)
  * id too, so a stall can be placed relative to them.
  *   5 = CCU -> sysmem, 6 = CCU -> gmem, 7 = render sysmem, 8 = render gmem
  */
+static thread_local struct tu_hanglog_entry *tu_hanglog_last_event;
+
 static void
 tu_hanglog_mark_event(struct tu_cmd_buffer *cmd, struct tu_cs *cs, uint8_t kind)
 {
    uint32_t id = tu_hanglog_next_id();
    struct tu_hanglog_entry *e = &tu_hanglog_ring[id & (TU_HANGLOG_RING - 1)];
+   tu_hanglog_last_event = e;
    memset(e, 0, sizeof(*e));
    e->id = id;
    e->kind = kind;
@@ -1553,6 +1556,20 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
       cmd->state.rp.force_render_mode_reason = "TU_GMEM_FOR";
       tu_gmem_for_hits.fetch_add(1, std::memory_order_relaxed);
       return false;
+   }
+
+   /* TU_GMEM_EMPTY=1: GMEM for render passes that contain no draws
+    * (load/store/clear/resolve-only passes).
+    */
+   {
+      static int empty = -1;
+      if (unlikely(empty < 0))
+         empty = debug_get_bool_option("TU_GMEM_EMPTY", false);
+      if (empty && cmd->state.rp.drawcall_count == 0) {
+         cmd->state.rp.force_render_mode_reason = "TU_GMEM_EMPTY";
+         tu_gmem_for_hits.fetch_add(1, std::memory_order_relaxed);
+         return false;
+      }
    }
 
    /* TU_GMEM_DEPTH=1: GMEM for render passes with a depth/stencil attachment
@@ -4302,8 +4319,39 @@ tu_cmd_render(struct tu_cmd_buffer *cmd_buffer,
 
    tu_autotune::rp_ctx_t rp_ctx = NULL;
    bool sysmem = use_sysmem_rendering(cmd_buffer, &rp_ctx, rp_key);
-   if (unlikely(tu_hanglog_enabled))
+   if (unlikely(tu_hanglog_enabled)) {
       tu_hanglog_mark_event(cmd_buffer, &cmd_buffer->cs, sysmem ? 7 : 8);
+      /* describe the pass in the entry we just wrote */
+      struct tu_hanglog_entry *e = tu_hanglog_last_event;
+      if (e && cmd_buffer->state.pass && cmd_buffer->state.subpass) {
+         const struct tu_render_pass *pass = cmd_buffer->state.pass;
+         const struct tu_subpass *sp = cmd_buffer->state.subpass;
+         e->count = cmd_buffer->state.rp.drawcall_count;
+         e->w = (uint16_t) MIN2(cmd_buffer->state.render_areas[0].extent.width, 65535u);
+         e->h = (uint16_t) MIN2(cmd_buffer->state.render_areas[0].extent.height, 65535u);
+         e->ncolor = (uint8_t) sp->color_count;
+         for (uint32_t i = 0; i < sp->color_count; i++) {
+            uint32_t a = sp->color_attachments[i].attachment;
+            if (a != VK_ATTACHMENT_UNUSED) {
+               e->color_fmt = (uint16_t) pass->attachments[a].format;
+               e->samples = (uint8_t) pass->attachments[a].samples;
+               break;
+            }
+         }
+         uint32_t d = sp->depth_stencil_attachment.attachment;
+         if (d != VK_ATTACHMENT_UNUSED)
+            e->depth_fmt = (uint16_t) pass->attachments[d].format;
+         /* load/store flags of the first attachments, packed into instances */
+         uint32_t bits = 0;
+         for (uint32_t a = 0; a < MIN2(pass->attachment_count, 8u); a++) {
+            const struct tu_render_pass_attachment *att = &pass->attachments[a];
+            bits |= (att->clear_mask ? 1u : 0u) << (a * 4);
+            bits |= (att->load ? 2u : 0u) << (a * 4);
+            bits |= (att->store ? 4u : 0u) << (a * 4);
+         }
+         e->instances = bits;
+      }
+   }
    if (unlikely(tu_hanglog_enabled) && cmd_buffer->hanglog_seq) {
       struct tu_hanglog_rpmode *m = &tu_hanglog_rpmodes[
          tu_hanglog_rp_slot(cmd_buffer->hanglog_seq, cmd_buffer->hanglog_rp)];
