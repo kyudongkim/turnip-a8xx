@@ -1599,6 +1599,20 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
     * TU_GMEM_MERGED=depth: only split passes with a depth/stencil attachment.
     * TU_GMEM_MERGED=nodepth: only split passes without one.
     */
+   /* TU_MERGED_NOAT=1: split passes are rendered in sysmem without the
+    * autotuner (no autotune ZPASS_DONE / timestamp instrumentation).
+    */
+   if (cmd->state.rp.split_pass) {
+      static int noat = -1;
+      if (unlikely(noat < 0))
+         noat = debug_get_bool_option("TU_MERGED_NOAT", false);
+      if (noat) {
+         cmd->state.rp.force_render_mode_reason = "TU_MERGED_NOAT";
+         tu_gmem_for_hits.fetch_add(1, std::memory_order_relaxed);
+         return true;
+      }
+   }
+
    if (cmd->state.rp.split_pass) {
       static int mode = -1; /* 0 off, 1 all, 2 depth, 3 nodepth */
       if (unlikely(mode < 0)) {
@@ -4423,6 +4437,28 @@ tu_cmd_render(struct tu_cmd_buffer *cmd_buffer,
       m->rp = cmd_buffer->hanglog_rp;
       m->mode = sysmem ? 1 : 2;
    }
+   /* TU_MERGED_PRE=1: before a split pass rendered in sysmem, clean and
+    * invalidate all caches, drain the GPU and force a CCU mode re-program.
+    */
+   if (sysmem && cmd_buffer->state.rp.split_pass) {
+      static int pre = -1;
+      if (unlikely(pre < 0))
+         pre = debug_get_bool_option("TU_MERGED_PRE", false);
+      if (pre) {
+         struct tu_cs *cs = &cmd_buffer->cs;
+         tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CCU_CLEAN_COLOR);
+         tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CCU_CLEAN_DEPTH);
+         tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CACHE_CLEAN);
+         tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CCU_INVALIDATE_COLOR);
+         tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CCU_INVALIDATE_DEPTH);
+         tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CACHE_INVALIDATE);
+         tu_cs_emit_pkt7(cs, CP_WAIT_MEM_WRITES, 0);
+         tu_cs_emit_wfi(cs);
+         tu_cs_emit_pkt7(cs, CP_WAIT_FOR_ME, 0);
+         cmd_buffer->state.ccu_state = TU_CMD_CCU_GMEM; /* force re-program */
+      }
+   }
+
    if (sysmem)
       tu_cmd_render_sysmem<CHIP>(cmd_buffer, rp_ctx);
    else
