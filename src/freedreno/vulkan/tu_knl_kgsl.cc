@@ -1926,6 +1926,10 @@ hanglog_kind_str(uint8_t k)
    case 2: return "draw-indirect";
    case 3: return "dispatch";
    case 4: return "dispatch-indirect";
+   case 5: return "CCU->SYSMEM";
+   case 6: return "CCU->GMEM";
+   case 7: return "RENDER-START(SYSMEM)";
+   case 8: return "RENDER-START(GMEM)";
    default: return "?";
    }
 }
@@ -2045,7 +2049,7 @@ hanglog_thread(void *data)
          lost_reported = true;
          uint32_t marker = dev->global_bo_map->hanglog_marker;
          mesa_logw("TU_HANGLOG: DEVICE LOST reported to the app; CP marker %u", marker);
-         for (int k = 3; k >= 1; k--)
+         for (int k = 12; k >= 1; k--)
             if (marker > (uint32_t) k)
                hanglog_print_entry("before", marker - k);
          hanglog_print_entry("AT", marker);
@@ -2086,7 +2090,7 @@ hanglog_thread(void *data)
                          queue->msm_queue_id, (now - s->since_ns) / 1e9,
                          rd.timestamp, submitted, marker,
                          tu_gmem_for_hits.load(std::memory_order_relaxed));
-               for (int k = 3; k >= 1; k--)
+               for (int k = 12; k >= 1; k--)
                   if (marker > (uint32_t) k)
                      hanglog_print_entry("before", marker - k);
                hanglog_print_entry("AT", marker);

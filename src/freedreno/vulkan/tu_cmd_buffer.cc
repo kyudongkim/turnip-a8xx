@@ -770,6 +770,35 @@ emit_rb_ccu_cntl(struct tu_cs *cs, struct tu_device *dev, bool gmem)
  * blits and draws). This deals with changing CCU state as well as the usual
  * cache flushing.
  */
+/* TU_HANGLOG: non-draw events (CCU mode switches, render pass starts) get an
+ * id too, so a stall can be placed relative to them.
+ *   5 = CCU -> sysmem, 6 = CCU -> gmem, 7 = render sysmem, 8 = render gmem
+ */
+static void
+tu_hanglog_mark_event(struct tu_cmd_buffer *cmd, struct tu_cs *cs, uint8_t kind)
+{
+   uint32_t id = tu_hanglog_next_id();
+   struct tu_hanglog_entry *e = &tu_hanglog_ring[id & (TU_HANGLOG_RING - 1)];
+   memset(e, 0, sizeof(*e));
+   e->id = id;
+   e->kind = kind;
+   e->cmd_seq = cmd->hanglog_seq;
+   e->rp = cmd->hanglog_rp;
+   e->idx = cmd->hanglog_idx;
+   tu_cs_emit_pkt7(cs, CP_MEM_WRITE, 3);
+   tu_cs_emit_qw(cs, global_iova(cmd, hanglog_marker));
+   tu_cs_emit(cs, id);
+}
+
+static bool
+tu_ccu_wfi_enabled(void)
+{
+   static int v = -1;
+   if (unlikely(v < 0))
+      v = debug_get_bool_option("TU_CCU_WFI", false);
+   return v;
+}
+
 template <chip CHIP>
 void
 tu_emit_cache_flush_ccu(struct tu_cmd_buffer *cmd_buffer,
@@ -801,6 +830,14 @@ tu_emit_cache_flush_ccu(struct tu_cmd_buffer *cmd_buffer,
          TU_CMD_FLAG_CCU_INVALIDATE_COLOR |
          TU_CMD_FLAG_CCU_INVALIDATE_DEPTH |
          (CHIP == A6XX ? TU_CMD_FLAG_WAIT_FOR_IDLE : 0);
+      /* TU_CCU_WFI=1: also drain the GPU (and make sure the clean/invalidate
+       * events completed) before reprogramming the CCU layout on A7xx+.
+       */
+      if (CHIP >= A7XX && tu_ccu_wfi_enabled())
+         cmd_buffer->state.cache.flush_bits |=
+            TU_CMD_FLAG_CCU_CLEAN_COLOR | TU_CMD_FLAG_CCU_CLEAN_DEPTH |
+            TU_CMD_FLAG_WAIT_MEM_WRITES | TU_CMD_FLAG_WAIT_FOR_IDLE |
+            TU_CMD_FLAG_WAIT_FOR_ME;
       cmd_buffer->state.cache.pending_flush_bits &= ~(
          TU_CMD_FLAG_CCU_INVALIDATE_COLOR |
          TU_CMD_FLAG_CCU_INVALIDATE_DEPTH |
@@ -812,6 +849,13 @@ tu_emit_cache_flush_ccu(struct tu_cmd_buffer *cmd_buffer,
    if (ccu_state != cmd_buffer->state.ccu_state) {
       emit_rb_ccu_cntl<CHIP>(cs, cmd_buffer->device,
                              ccu_state == TU_CMD_CCU_GMEM);
+      if (CHIP >= A7XX && tu_ccu_wfi_enabled()) {
+         tu_cs_emit_wfi(cs);
+         tu_cs_emit_pkt7(cs, CP_WAIT_FOR_ME, 0);
+      }
+      if (unlikely(tu_hanglog_enabled))
+         tu_hanglog_mark_event(cmd_buffer, cs,
+                               ccu_state == TU_CMD_CCU_GMEM ? 6 : 5);
       if (cmd_buffer->device->physical_device->info->props.has_gmem_vpc_attr_buf) {
          tu7_thread_control(cs, CP_SET_THREAD_BOTH);
 
@@ -4258,6 +4302,8 @@ tu_cmd_render(struct tu_cmd_buffer *cmd_buffer,
 
    tu_autotune::rp_ctx_t rp_ctx = NULL;
    bool sysmem = use_sysmem_rendering(cmd_buffer, &rp_ctx, rp_key);
+   if (unlikely(tu_hanglog_enabled))
+      tu_hanglog_mark_event(cmd_buffer, &cmd_buffer->cs, sysmem ? 7 : 8);
    if (unlikely(tu_hanglog_enabled) && cmd_buffer->hanglog_seq) {
       struct tu_hanglog_rpmode *m = &tu_hanglog_rpmodes[
          tu_hanglog_rp_slot(cmd_buffer->hanglog_seq, cmd_buffer->hanglog_rp)];
