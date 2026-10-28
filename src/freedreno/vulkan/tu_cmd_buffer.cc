@@ -864,6 +864,7 @@ tu_hanglog_mark_event(struct tu_cmd_buffer *cmd, struct tu_cs *cs, uint8_t kind)
 struct tu_hanglog_entry *
 tu_hanglog_mark_cmd(struct tu_cmd_buffer *cmd, uint8_t kind)
 {
+   cmd->wfm_pending |= 1ull << kind;
    if (likely(!tu_hanglog_enabled) || tu_hanglog_lite)
       return NULL;
    if (cmd->vk.level != VK_COMMAND_BUFFER_LEVEL_PRIMARY)
@@ -5008,6 +5009,7 @@ tu_cmd_buffer_begin(struct tu_cmd_buffer *cmd_buffer,
    cmd_buffer->hanglog_seq = 0;
    cmd_buffer->hanglog_first_id = cmd_buffer->hanglog_last_id = 0;
    cmd_buffer->hanglog_last_draw = NULL;
+   cmd_buffer->wfm_pending = 0;
 
    memset(&cmd_buffer->state, 0, sizeof(cmd_buffer->state));
    vk_dynamic_graphics_state_init(&cmd_buffer->vk.dynamic_graphics_state);
@@ -9476,6 +9478,40 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
    if (unlikely(tu_hanglog_enabled)) {
       cmd->hanglog_count = draw_count;
       tu_hanglog_mark<CHIP>(cmd, cs, draw_count == 0 ? 2 : 1);
+   }
+
+   /* TU_WFM_AFTER=<kinds>: CP_WAIT_FOR_ME before the first draw that follows
+    * one of the listed commands (recorded since the previous draw).
+    */
+   {
+      static int init = 0;
+      static uint64_t mask = 0;
+      if (unlikely(!init)) {
+         init = 1;
+         static const struct { const char *n; unsigned k; } names[] = {
+            { "barrier", 13 }, { "waitevents", 14 }, { "setevent", 15 },
+            { "resetevent", 16 }, { "copybuf", 17 }, { "copyimg", 18 },
+            { "buf2img", 19 }, { "img2buf", 20 }, { "blit", 21 },
+            { "resolve", 22 }, { "clearcolor", 23 }, { "cleards", 24 },
+            { "fill", 25 }, { "update", 26 }, { "qreset", 27 },
+            { "qbegin", 28 }, { "qend", 29 }, { "timestamp", 30 },
+            { "qcopy", 31 }, { "exec", 32 }, { "beginrender", 33 },
+            { "marker", 34 }, { "clearatt", 35 }, { "begincmd", 11 },
+         };
+         const char *v = os_get_option("TU_WFM_AFTER");
+         if (v) {
+            char buf[512];
+            snprintf(buf, sizeof(buf), "%s", v);
+            for (char *save = NULL, *t = strtok_r(buf, ",", &save); t;
+                 t = strtok_r(NULL, ",", &save))
+               for (unsigned i = 0; i < ARRAY_SIZE(names); i++)
+                  if (!strcmp(t, names[i].n))
+                     mask |= 1ull << names[i].k;
+         }
+      }
+      if (mask && (cmd->wfm_pending & mask))
+         tu_cs_emit_pkt7(cs, CP_WAIT_FOR_ME, 0);
+      cmd->wfm_pending = 0;
    }
 
    /* TU_DRAW_PAD=memwrite|nop|wmw|wfm: emit one extra CP packet before every
