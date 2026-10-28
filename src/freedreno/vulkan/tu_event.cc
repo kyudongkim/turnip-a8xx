@@ -111,6 +111,7 @@ tu_CmdSetEvent2(VkCommandBuffer commandBuffer,
                 const VkDependencyInfo *pDependencyInfo)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
+   tu_hanglog_mark_cmd(cmd, 15);
    VK_FROM_HANDLE(tu_event, event, _event);
    VkPipelineStageFlags2 src_stage_mask =
       vk_collect_dependency_info_src_stages(pDependencyInfo);
@@ -133,6 +134,7 @@ tu_CmdResetEvent2(VkCommandBuffer commandBuffer,
                   VkPipelineStageFlags2 stageMask)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
+   tu_hanglog_mark_cmd(cmd, 16);
    VK_FROM_HANDLE(tu_event, event, _event);
 
    tu_write_event<CHIP>(cmd, event, stageMask, 0);
@@ -147,6 +149,7 @@ tu_CmdWaitEvents2(VkCommandBuffer commandBuffer,
                   const VkDependencyInfo* pDependencyInfos)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
+   tu_hanglog_mark_cmd(cmd, 14);
    struct tu_cs *cs = cmd->state.pass ? &cmd->draw_cs : &cmd->cs;
 
    for (uint32_t i = 0; i < eventCount; i++) {

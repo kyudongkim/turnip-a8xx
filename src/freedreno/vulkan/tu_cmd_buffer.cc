@@ -798,6 +798,37 @@ tu_hanglog_mark_event(struct tu_cmd_buffer *cmd, struct tu_cs *cs, uint8_t kind)
    tu_cs_emit(cs, id);
 }
 
+/* TU_HANGLOG: marker at the start of non-draw commands (copies, barriers,
+ * events, queries, ...) and at command buffer begin/end, so a stall inside a
+ * command buffer without draws can be located. Kinds 11..35.
+ */
+void
+tu_hanglog_mark_cmd(struct tu_cmd_buffer *cmd, uint8_t kind)
+{
+   if (likely(!tu_hanglog_enabled))
+      return;
+   if (cmd->vk.level != VK_COMMAND_BUFFER_LEVEL_PRIMARY)
+      return;
+   struct tu_cs *cs = cmd->state.pass ? &cmd->draw_cs : &cmd->cs;
+   if (!cmd->hanglog_seq)
+      cmd->hanglog_seq = tu_hanglog_next_seq();
+   uint32_t id = tu_hanglog_next_id();
+   if (!cmd->hanglog_first_id)
+      cmd->hanglog_first_id = id;
+   cmd->hanglog_last_id = id;
+   struct tu_hanglog_entry *e = &tu_hanglog_ring[id & (TU_HANGLOG_RING - 1)];
+   memset(e, 0, sizeof(*e));
+   e->id = id;
+   e->kind = kind;
+   e->cmd_seq = cmd->hanglog_seq;
+   e->rp = cmd->hanglog_rp;
+   e->idx = cmd->hanglog_idx;
+   e->count = cmd->state.pass ? 1 : 0; /* inside a render pass? */
+   tu_cs_emit_pkt7(cs, CP_MEM_WRITE, 3);
+   tu_cs_emit_qw(cs, global_iova(cmd, hanglog_marker));
+   tu_cs_emit(cs, id);
+}
+
 static bool
 tu_ccu_wfi_enabled(void)
 {
@@ -4855,6 +4886,7 @@ tu_BeginCommandBuffer(VkCommandBuffer commandBuffer,
       }
    }
 
+   tu_hanglog_mark_cmd(cmd_buffer, 11);
    return VK_SUCCESS;
 }
 
@@ -5673,6 +5705,7 @@ VKAPI_ATTR VkResult VKAPI_CALL
 tu_EndCommandBuffer(VkCommandBuffer commandBuffer)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd_buffer, commandBuffer);
+   tu_hanglog_mark_cmd(cmd_buffer, 12);
 
    /* We currently flush CCU at the end of the command buffer, like
     * what the blob does. There's implicit synchronization around every
@@ -6689,6 +6722,7 @@ tu_CmdExecuteCommands(VkCommandBuffer commandBuffer,
                       const VkCommandBuffer *pCmdBuffers)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
+   tu_hanglog_mark_cmd(cmd, 32);
    VkResult result;
 
    assert(commandBufferCount > 0);
@@ -7532,6 +7566,7 @@ tu_CmdBeginRendering(VkCommandBuffer commandBuffer,
                      const VkRenderingInfo *pRenderingInfo)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
+   tu_hanglog_mark_cmd(cmd, 33);
    cmd->hanglog_rp++;
 
    tu_setup_dynamic_render_pass(cmd, pRenderingInfo);
@@ -11175,6 +11210,7 @@ tu_CmdPipelineBarrier2(VkCommandBuffer commandBuffer,
                        const VkDependencyInfo *pDependencyInfo)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd_buffer, commandBuffer);
+   tu_hanglog_mark_cmd(cmd_buffer, 13);
 
    tu_barrier(cmd_buffer, 1, pDependencyInfo, false);
 }
@@ -11354,6 +11390,7 @@ tu_CmdWriteBufferMarker2AMD(VkCommandBuffer commandBuffer,
 {
    /* Almost the same as tu_write_event, but also allowed in renderpass */
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
+   tu_hanglog_mark_cmd(cmd, 34);
    VK_FROM_HANDLE(tu_buffer, buffer, dstBuffer);
 
    uint64_t va = vk_buffer_address(&buffer->vk, dstOffset);

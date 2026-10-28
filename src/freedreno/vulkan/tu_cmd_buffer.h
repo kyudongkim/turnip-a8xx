@@ -1089,4 +1089,6 @@ tu_fdm_num_layers(const struct tu_cmd_buffer *cmd)
       (cmd->state.fdm_per_layer ? cmd->state.framebuffer->layers : 1);
 }
 
+void tu_hanglog_mark_cmd(struct tu_cmd_buffer *cmd, uint8_t kind);
+
 #endif /* TU_CMD_BUFFER_H */

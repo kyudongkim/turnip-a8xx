@@ -1954,6 +1954,31 @@ hanglog_kind_str(uint8_t k)
    case 8: return "RENDER-START(GMEM)";
    case 9: return "SYSMEM-CLEAR(2D)";
    case 10: return "SYSMEM-CLEAR(3D)";
+   case 11: return "BEGIN-CMDBUF";
+   case 12: return "END-CMDBUF";
+   case 13: return "PipelineBarrier";
+   case 14: return "WaitEvents";
+   case 15: return "SetEvent";
+   case 16: return "ResetEvent";
+   case 17: return "CopyBuffer";
+   case 18: return "CopyImage";
+   case 19: return "CopyBufferToImage";
+   case 20: return "CopyImageToBuffer";
+   case 21: return "BlitImage";
+   case 22: return "ResolveImage";
+   case 23: return "ClearColorImage";
+   case 24: return "ClearDepthStencilImage";
+   case 25: return "FillBuffer";
+   case 26: return "UpdateBuffer";
+   case 27: return "ResetQueryPool";
+   case 28: return "BeginQuery";
+   case 29: return "EndQuery";
+   case 30: return "WriteTimestamp";
+   case 31: return "CopyQueryPoolResults";
+   case 32: return "ExecuteCommands";
+   case 33: return "BeginRendering";
+   case 34: return "WriteBufferMarker";
+   case 35: return "ClearAttachments";
    default: return "?";
    }
 }
@@ -2049,13 +2074,13 @@ hanglog_print_submit(const char *tag, uint32_t ctx, uint32_t ts,
       unsigned draws = 0, disp = 0, shown = 0;
       for (uint32_t id = first; id && id <= last; id++) {
          const struct tu_hanglog_entry *e = &tu_hanglog_ring[id & (TU_HANGLOG_RING - 1)];
-         if (e->id != id || (e->cmd_seq != hs->seq[c] && e->kind < 5))
+         if (e->id != id || e->cmd_seq != hs->seq[c])
             continue;
          if (e->kind <= 2)
             draws++;
          else if (e->kind <= 4)
             disp++;
-         else if (shown < 40) {
+         else if (shown < 60) {
             hanglog_print_entry("      ev", id);
             shown++;
          }
@@ -2063,9 +2088,9 @@ hanglog_print_submit(const char *tag, uint32_t ctx, uint32_t ts,
       mesa_logw("TU_HANGLOG:       cmdbuf#%u: %u draws, %u dispatches", hs->seq[c], draws, disp);
       /* last few draws/dispatches of this command buffer */
       unsigned tail = 0;
-      for (uint32_t id = last; id >= first && id && tail < 6; id--) {
+      for (uint32_t id = last; id >= first && id && tail < 8; id--) {
          const struct tu_hanglog_entry *e = &tu_hanglog_ring[id & (TU_HANGLOG_RING - 1)];
-         if (e->id != id || e->cmd_seq != hs->seq[c] || e->kind > 4)
+         if (e->id != id || e->cmd_seq != hs->seq[c])
             continue;
          hanglog_print_entry("      tail", id);
          tail++;

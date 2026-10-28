@@ -959,6 +959,7 @@ tu_CmdCopyQueryPoolResults(VkCommandBuffer commandBuffer,
                            VkQueryResultFlags flags)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmdbuf, commandBuffer);
+   tu_hanglog_mark_cmd(cmdbuf, 31);
    VK_FROM_HANDLE(tu_query_pool, pool, queryPool);
    VK_FROM_HANDLE(tu_buffer, buffer, dstBuffer);
    struct tu_cs *cs = &cmdbuf->cs;
@@ -1049,6 +1050,7 @@ tu_CmdResetQueryPool(VkCommandBuffer commandBuffer,
                      uint32_t queryCount)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmdbuf, commandBuffer);
+   tu_hanglog_mark_cmd(cmdbuf, 27);
    VK_FROM_HANDLE(tu_query_pool, pool, queryPool);
 
    switch (pool->vk.query_type) {
@@ -1452,6 +1454,7 @@ tu_CmdBeginQueryIndexedEXT(VkCommandBuffer commandBuffer,
                            uint32_t index)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmdbuf, commandBuffer);
+   tu_hanglog_mark_cmd(cmdbuf, 28);
    VK_FROM_HANDLE(tu_query_pool, pool, queryPool);
    assert(query < pool->size);
 
@@ -2062,6 +2065,7 @@ tu_CmdEndQueryIndexedEXT(VkCommandBuffer commandBuffer,
                          uint32_t index)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmdbuf, commandBuffer);
+   tu_hanglog_mark_cmd(cmdbuf, 29);
    VK_FROM_HANDLE(tu_query_pool, pool, queryPool);
    assert(query < pool->size);
 
@@ -2104,6 +2108,7 @@ tu_CmdWriteTimestamp2(VkCommandBuffer commandBuffer,
                       uint32_t query)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
+   tu_hanglog_mark_cmd(cmd, 30);
    VK_FROM_HANDLE(tu_query_pool, pool, queryPool);
 
    /* Inside a render pass, just write the timestamp multiple times so that

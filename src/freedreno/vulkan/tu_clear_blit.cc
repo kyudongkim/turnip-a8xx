@@ -2857,6 +2857,7 @@ tu_CmdBlitImage2(VkCommandBuffer commandBuffer,
 
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
+   tu_hanglog_mark_cmd(cmd, 21);
    VK_FROM_HANDLE(tu_image, src_image, pBlitImageInfo->srcImage);
    VK_FROM_HANDLE(tu_image, dst_image, pBlitImageInfo->dstImage);
 
@@ -3042,6 +3043,7 @@ tu_CmdCopyBufferToImage2(VkCommandBuffer commandBuffer,
                          const VkCopyBufferToImageInfo2 *pCopyBufferToImageInfo)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
+   tu_hanglog_mark_cmd(cmd, 19);
    VK_FROM_HANDLE(tu_image, dst_image, pCopyBufferToImageInfo->dstImage);
    VK_FROM_HANDLE(tu_buffer, src_buffer, pCopyBufferToImageInfo->srcBuffer);
 
@@ -3263,6 +3265,7 @@ tu_CmdCopyImageToBuffer2(VkCommandBuffer commandBuffer,
                          const VkCopyImageToBufferInfo2 *pCopyImageToBufferInfo)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
+   tu_hanglog_mark_cmd(cmd, 20);
    VK_FROM_HANDLE(tu_image, src_image, pCopyImageToBufferInfo->srcImage);
    VK_FROM_HANDLE(tu_buffer, dst_buffer, pCopyImageToBufferInfo->dstBuffer);
 
@@ -3629,6 +3632,7 @@ tu_CmdCopyImage2(VkCommandBuffer commandBuffer,
                  const VkCopyImageInfo2 *pCopyImageInfo)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
+   tu_hanglog_mark_cmd(cmd, 18);
    VK_FROM_HANDLE(tu_image, src_image, pCopyImageInfo->srcImage);
    VK_FROM_HANDLE(tu_image, dst_image, pCopyImageInfo->dstImage);
 
@@ -3902,6 +3906,7 @@ tu_CmdCopyBuffer2(VkCommandBuffer commandBuffer,
                   const VkCopyBufferInfo2 *pCopyBufferInfo)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
+   tu_hanglog_mark_cmd(cmd, 17);
    VK_FROM_HANDLE(tu_buffer, src_buffer, pCopyBufferInfo->srcBuffer);
    VK_FROM_HANDLE(tu_buffer, dst_buffer, pCopyBufferInfo->dstBuffer);
 
@@ -3953,6 +3958,7 @@ tu_CmdUpdateBuffer(VkCommandBuffer commandBuffer,
                    const void *pData)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
+   tu_hanglog_mark_cmd(cmd, 26);
    VK_FROM_HANDLE(tu_buffer, buffer, dstBuffer);
 
    struct tu_cs_memory tmp;
@@ -4048,6 +4054,7 @@ tu_CmdFillBuffer(VkCommandBuffer commandBuffer,
                  VkDeviceSize fillSize,
                  uint32_t data)
 {
+   tu_hanglog_mark_cmd(tu_cmd_buffer_from_handle(commandBuffer), 25);
    VK_FROM_HANDLE(tu_buffer, buffer, dstBuffer);
 
    fillSize = vk_buffer_range(&buffer->vk, dstOffset, fillSize);
@@ -4078,6 +4085,7 @@ tu_CmdResolveImage2(VkCommandBuffer commandBuffer,
                     const VkResolveImageInfo2 *pResolveImageInfo)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
+   tu_hanglog_mark_cmd(cmd, 22);
    VK_FROM_HANDLE(tu_image, src_image, pResolveImageInfo->srcImage);
    VK_FROM_HANDLE(tu_image, dst_image, pResolveImageInfo->dstImage);
    struct tu_cs *cs = &cmd->cs;
@@ -4466,6 +4474,7 @@ tu_CmdClearColorImage(VkCommandBuffer commandBuffer,
                       const VkImageSubresourceRange *pRanges)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
+   tu_hanglog_mark_cmd(cmd, 23);
    VK_FROM_HANDLE(tu_image, image, image_h);
 
    trace_start_clear_color_image(&cmd->trace, &cmd->cs, cmd, image->vk.format);
@@ -4509,6 +4518,7 @@ tu_CmdClearDepthStencilImage(VkCommandBuffer commandBuffer,
                              const VkImageSubresourceRange *pRanges)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
+   tu_hanglog_mark_cmd(cmd, 24);
    VK_FROM_HANDLE(tu_image, image, image_h);
 
    trace_start_clear_depth_stencil_image(&cmd->trace, &cmd->cs, cmd,
@@ -5283,6 +5293,7 @@ tu_CmdClearAttachments(VkCommandBuffer commandBuffer,
                        const VkClearRect *pRects)
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd, commandBuffer);
+   tu_hanglog_mark_cmd(cmd, 35);
 
    for (uint32_t j = 0; j < attachmentCount; j++) {
       if ((pAttachments[j].aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) == 0)
