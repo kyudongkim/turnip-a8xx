@@ -1748,10 +1748,31 @@ tu_physical_device_init(struct tu_physical_device *device,
       device->dev_info = info;
       device->info = &device->dev_info;
 
+      /* TU_SYSMEM_VPC_SMALL=1: use the (smaller) GMEM-mode VPC buffer sizes
+       * for the sysmem layout too.
+       */
+      if (debug_get_bool_option("TU_SYSMEM_VPC_SMALL", false)) {
+         device->dev_info.props.sysmem_vpc_attr_buf_size = info.props.gmem_vpc_attr_buf_size;
+         device->dev_info.props.sysmem_vpc_pos_buf_size = info.props.gmem_vpc_pos_buf_size;
+         device->dev_info.props.sysmem_vpc_bv_pos_buf_size = info.props.gmem_vpc_bv_pos_buf_size;
+      }
       device->usable_gmem_size_gmem =
-         fd6_calc_gmem_cache_offsets(&info, device->gmem_size,
+         fd6_calc_gmem_cache_offsets(&device->dev_info, device->gmem_size,
                                      &device->config_gmem,
                                      &device->config_sysmem);
+      {
+         const struct fd6_gmem_config *c[2] = { &device->config_sysmem, &device->config_gmem };
+         for (int k = 0; k < 2; k++)
+            mesa_logw("TU_GMEMCFG %s: gmem_size 0x%x num_ccu %u | depth_ccu 0x%x (sz 0x%x frac %u) color_ccu 0x%x (sz 0x%x frac %u) "
+                      "vpc_pos 0x%x (sz 0x%x) vpc_attr 0x%x (sz 0x%x) vpc_bv_pos 0x%x (sz 0x%x) usable_gmem 0x%x",
+                      k ? "gmem" : "sysmem", device->gmem_size, info.num_ccu,
+                      c[k]->depth_ccu_offset, c[k]->depth_cache_size, c[k]->depth_cache_fraction,
+                      c[k]->color_ccu_offset, c[k]->color_cache_size, c[k]->color_cache_fraction,
+                      c[k]->vpc_pos_buf_offset, c[k]->vpc_pos_buf_size,
+                      c[k]->vpc_attr_buf_offset, c[k]->vpc_attr_buf_size,
+                      c[k]->vpc_bv_pos_buf_offset, c[k]->vpc_bv_pos_buf_size,
+                      device->usable_gmem_size_gmem);
+      }
 
       if (!instance->drirc.misc.dont_reserve_descriptor_set) {
          device->usable_sets = device->reserved_set_idx = device->info->props.max_sets - 1;
