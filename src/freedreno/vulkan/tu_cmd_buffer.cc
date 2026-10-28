@@ -1558,6 +1558,33 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
       return false;
    }
 
+   /* TU_GMEM_MERGED=1|all: GMEM for split (suspend/resume) passes.
+    * TU_GMEM_MERGED=depth: only split passes with a depth/stencil attachment.
+    * TU_GMEM_MERGED=nodepth: only split passes without one.
+    */
+   if (cmd->state.rp.split_pass) {
+      static int mode = -1; /* 0 off, 1 all, 2 depth, 3 nodepth */
+      if (unlikely(mode < 0)) {
+         const char *v = os_get_option("TU_GMEM_MERGED");
+         if (!v || !*v || !strcmp(v, "0") || !strcmp(v, "false"))
+            mode = 0;
+         else if (!strcmp(v, "depth"))
+            mode = 2;
+         else if (!strcmp(v, "nodepth"))
+            mode = 3;
+         else
+            mode = 1;
+      }
+      bool has_depth = cmd->state.subpass &&
+         cmd->state.subpass->depth_stencil_attachment.attachment !=
+            VK_ATTACHMENT_UNUSED;
+      if (mode == 1 || (mode == 2 && has_depth) || (mode == 3 && !has_depth)) {
+         cmd->state.rp.force_render_mode_reason = "TU_GMEM_MERGED";
+         tu_gmem_for_hits.fetch_add(1, std::memory_order_relaxed);
+         return false;
+      }
+   }
+
    /* TU_GMEM_EMPTY=1: GMEM for render passes that contain no draws
     * (load/store/clear/resolve-only passes).
     */
@@ -4363,6 +4390,27 @@ tu_cmd_render(struct tu_cmd_buffer *cmd_buffer,
       tu_cmd_render_sysmem<CHIP>(cmd_buffer, rp_ctx);
    else
       tu_cmd_render_tiles<CHIP>(cmd_buffer, rp_ctx, fdm_offsets);
+
+   /* TU_MERGED_WFI=1: after a split pass rendered in sysmem, clean CCU
+    * color/depth and wait for idle before anything else runs.
+    * TU_MERGED_WFI=all: do it after every sysmem pass.
+    */
+   if (sysmem) {
+      static int wfi = -1; /* 0 off, 1 split, 2 all */
+      if (unlikely(wfi < 0)) {
+         const char *v = os_get_option("TU_MERGED_WFI");
+         wfi = (!v || !*v || !strcmp(v, "0")) ? 0 :
+               !strcmp(v, "all") ? 2 : 1;
+      }
+      if (wfi == 2 || (wfi == 1 && cmd_buffer->state.rp.split_pass)) {
+         struct tu_cs *cs = &cmd_buffer->cs;
+         tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CCU_CLEAN_COLOR);
+         tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CCU_CLEAN_DEPTH);
+         tu_emit_event_write<CHIP>(cmd_buffer, cs, FD_CACHE_CLEAN);
+         tu_cs_emit_wfi(cs);
+         tu_cs_emit_pkt7(cs, CP_WAIT_FOR_ME, 0);
+      }
+   }
 }
 
 static void tu_reset_render_pass(struct tu_cmd_buffer *cmd_buffer)
@@ -6491,6 +6539,7 @@ tu_render_pass_state_merge(struct tu_cmd_buffer *cmd, const struct tu_render_pas
    dst->has_zpass_done_sample_count_write_in_rp |= src->has_zpass_done_sample_count_write_in_rp;
    dst->disable_gmem |= src->disable_gmem;
    dst->force_gmem_hack |= src->force_gmem_hack;
+   dst->split_pass |= src->split_pass;
    dst->sysmem_single_prim_mode |= src->sysmem_single_prim_mode;
    dst->lrz_disable_for_next_rp |= src->lrz_disable_for_next_rp;
    dst->lrz_write_disabled |= src->lrz_write_disabled;
@@ -7706,13 +7755,8 @@ tu_CmdBeginRendering(VkCommandBuffer commandBuffer,
    /* TU_GMEM_MERGED=1: force GMEM for suspend/resume (split) dynamic
     * rendering passes only. The flag is OR-merged into the final pass.
     */
-   {
-      static int merged = -1;
-      if (unlikely(merged < 0))
-         merged = debug_get_bool_option("TU_GMEM_MERGED", false);
-      if (merged && (resuming || suspending))
-         cmd->state.rp.force_gmem_hack = true;
-   }
+   if (resuming || suspending)
+      cmd->state.rp.split_pass = true;
 }
 TU_GENX(tu_CmdBeginRendering);
 
