@@ -7702,6 +7702,17 @@ tu_CmdBeginRendering(VkCommandBuffer commandBuffer,
 
    if (resuming && cmd->state.suspend_resume == SR_NONE)
       cmd->state.suspend_resume = SR_IN_PRE_CHAIN;
+
+   /* TU_GMEM_MERGED=1: force GMEM for suspend/resume (split) dynamic
+    * rendering passes only. The flag is OR-merged into the final pass.
+    */
+   {
+      static int merged = -1;
+      if (unlikely(merged < 0))
+         merged = debug_get_bool_option("TU_GMEM_MERGED", false);
+      if (merged && (resuming || suspending))
+         cmd->state.rp.force_gmem_hack = true;
+   }
 }
 TU_GENX(tu_CmdBeginRendering);
 
