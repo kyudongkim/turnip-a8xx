@@ -27,6 +27,8 @@
 #include <string.h>
 
 #include "util/u_debug.h"
+#include "util/log.h"
+#include <inttypes.h>
 #include "util/macros.h"
 #include "util/os_time.h"
 
@@ -342,6 +344,8 @@ __vk_sync_wait(struct vk_device *device,
    }
 }
 
+static bool long_wait_log_enabled(void);
+
 VkResult
 vk_sync_wait(struct vk_device *device,
              struct vk_sync *sync,
@@ -349,6 +353,15 @@ vk_sync_wait(struct vk_device *device,
              enum vk_sync_wait_flags wait_flags,
              uint64_t abs_timeout_ns)
 {
+   if (unlikely(long_wait_log_enabled()) && !(wait_flags & VK_SYNC_WAIT_ANY)) {
+      struct vk_sync_wait w = {
+         .sync = sync,
+         .stage_mask = ~(VkPipelineStageFlags2)0,
+         .wait_value = wait_value,
+      };
+      return vk_sync_wait_many(device, 1, &w, wait_flags, abs_timeout_ns);
+   }
+
    uint64_t max_abs_timeout_ns = get_max_abs_timeout_ns();
    if (abs_timeout_ns > max_abs_timeout_ns) {
       VkResult result =
@@ -437,6 +450,87 @@ __vk_sync_wait_many(struct vk_device *device,
    }
 }
 
+/* TU_HANGLOG=1 (freedreno hang diagnostics): log CPU-side waits on GPU
+ * sync objects that take longer than 2 s, from the waiting thread itself.
+ */
+#include <sys/syscall.h>
+#include <unistd.h>
+
+static bool
+long_wait_log_enabled(void)
+{
+   static int enabled = -1;
+   if (unlikely(enabled < 0))
+      enabled = debug_get_bool_option("TU_HANGLOG", false);
+   return enabled;
+}
+
+static void
+log_long_wait(struct vk_device *device, uint32_t wait_count,
+              const struct vk_sync_wait *waits,
+              enum vk_sync_wait_flags wait_flags,
+              uint64_t start_ns, uint64_t abs_timeout_ns)
+{
+   uint64_t now = os_time_get_nano();
+   double waited = (now - start_ns) / 1e9;
+   double left = abs_timeout_ns == UINT64_MAX ? -1.0 :
+      (abs_timeout_ns > now ? (abs_timeout_ns - now) / 1e9 : 0.0);
+   mesa_logw("TU_HANGLOG: CPU WAIT tid %ld waiting %.1f s on %u sync(s)%s, timeout left %.1f s",
+             (long) syscall(SYS_gettid), waited, wait_count,
+             (wait_flags & VK_SYNC_WAIT_ANY) ? " (any)" :
+             (wait_flags & VK_SYNC_WAIT_PENDING) ? " (pending)" : "",
+             left);
+   for (uint32_t i = 0; i < MIN2(wait_count, 4u); i++) {
+      struct vk_sync *sync = waits[i].sync;
+      if (sync->flags & VK_SYNC_IS_TIMELINE) {
+         uint64_t cur = 0;
+         VkResult r = sync->type->get_value ?
+            sync->type->get_value(device, sync, &cur) : VK_ERROR_UNKNOWN;
+         mesa_logw("TU_HANGLOG:   [%u] timeline %p wait value %" PRIu64 ", current %s%" PRIu64,
+                   i, (void *) sync, waits[i].wait_value,
+                   r == VK_SUCCESS ? "" : "(unknown) ", cur);
+      } else {
+         mesa_logw("TU_HANGLOG:   [%u] binary %p type %p", i, (void *) sync,
+                   (const void *) sync->type);
+      }
+   }
+}
+
+static VkResult
+__vk_sync_wait_many_logged(struct vk_device *device,
+                           uint32_t wait_count,
+                           const struct vk_sync_wait *waits,
+                           enum vk_sync_wait_flags wait_flags,
+                           uint64_t abs_timeout_ns)
+{
+   if (!long_wait_log_enabled() || wait_count == 0)
+      return __vk_sync_wait_many(device, wait_count, waits, wait_flags,
+                                 abs_timeout_ns);
+
+   const uint64_t start = os_time_get_nano();
+   if (abs_timeout_ns <= start + 2000000000ull)
+      return __vk_sync_wait_many(device, wait_count, waits, wait_flags,
+                                 abs_timeout_ns);
+
+   uint64_t next = start + 2000000000ull;
+   unsigned logged = 0;
+   for (;;) {
+      uint64_t t = MIN2(abs_timeout_ns, next);
+      VkResult r = __vk_sync_wait_many(device, wait_count, waits, wait_flags, t);
+      if (r != VK_TIMEOUT || t >= abs_timeout_ns) {
+         if (logged)
+            mesa_logw("TU_HANGLOG: CPU WAIT tid %ld finished after %.1f s (result %d)",
+                      (long) syscall(SYS_gettid),
+                      (os_time_get_nano() - start) / 1e9, (int) r);
+         return r;
+      }
+      if (logged < 6)
+         log_long_wait(device, wait_count, waits, wait_flags, start, abs_timeout_ns);
+      logged++;
+      next = os_time_get_nano() + (logged < 3 ? 3000000000ull : 15000000000ull);
+   }
+}
+
 VkResult
 vk_sync_wait_many(struct vk_device *device,
                   uint32_t wait_count,
@@ -447,14 +541,14 @@ vk_sync_wait_many(struct vk_device *device,
    uint64_t max_abs_timeout_ns = get_max_abs_timeout_ns();
    if (abs_timeout_ns > max_abs_timeout_ns) {
       VkResult result =
-         __vk_sync_wait_many(device, wait_count, waits, wait_flags,
-                             max_abs_timeout_ns);
+         __vk_sync_wait_many_logged(device, wait_count, waits, wait_flags,
+                                    max_abs_timeout_ns);
       if (unlikely(result == VK_TIMEOUT))
          return vk_device_set_lost(device, "Maximum timeout exceeded!");
       return result;
    } else {
-      return __vk_sync_wait_many(device, wait_count, waits, wait_flags,
-                                 abs_timeout_ns);
+      return __vk_sync_wait_many_logged(device, wait_count, waits, wait_flags,
+                                        abs_timeout_ns);
    }
 }
 
