@@ -2155,11 +2155,19 @@ hanglog_dump_ib_map(uint32_t ctx, uint32_t ts)
          const struct tu_hanglog_entry *e = &tu_hanglog_ring[id & (TU_HANGLOG_RING - 1)];
          if (e->id != id || e->cmd_seq != hs->seq[c])
             continue;
-         mesa_logw("TU_HANGLOG: IBMAP ts %u id %u k%u #%u rp%u ib 0x%" PRIx64 "+0x%x vs=%s fs=%s cs=%s n=%u uav=0x%x",
-                   ts, id, e->kind, e->cmd_seq, e->rp, e->ib_start, e->ib_off * 4,
-                   e->kind <= 4 ? e->vs : "", e->kind <= 4 ? e->fs : "",
-                   e->kind <= 4 ? e->cs : "", e->kind <= 4 ? e->count : 0,
-                   e->kind <= 4 ? e->uav_mask : 0);
+         if (e->kind <= 2)
+            mesa_logw("TU_HANGLOG: IBMAP ts %u id %u k%u #%u rp%u ib 0x%" PRIx64 "+0x%x vs=%s fs=%s n=%u inst=%u uav=0x%x %s first=%u max=%u voff=%d isz=%u topo=%u restart=%u",
+                      ts, id, e->kind, e->cmd_seq, e->rp, e->ib_start, e->ib_off * 4,
+                      e->vs, e->fs, e->count, e->instances, e->uav_mask,
+                      (e->qflags & 1) ? "IDX" : "seq", e->qfirst, e->qcount,
+                      (int32_t) e->qtype, (e->qflags >> 1) & 7, (e->qflags >> 4) & 0xff,
+                      (e->qflags >> 12) & 1);
+         else
+            mesa_logw("TU_HANGLOG: IBMAP ts %u id %u k%u #%u rp%u ib 0x%" PRIx64 "+0x%x vs=%s fs=%s cs=%s n=%u uav=0x%x",
+                      ts, id, e->kind, e->cmd_seq, e->rp, e->ib_start, e->ib_off * 4,
+                      e->kind <= 4 ? e->vs : "", e->kind <= 4 ? e->fs : "",
+                      e->kind <= 4 ? e->cs : "", e->kind <= 4 ? e->count : 0,
+                      e->kind <= 4 ? e->uav_mask : 0);
          lines++;
       }
    }

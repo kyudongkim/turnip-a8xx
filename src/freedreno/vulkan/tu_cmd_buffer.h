@@ -714,6 +714,7 @@ struct tu_cmd_buffer
    bool synchack_prev_uav;
    uint32_t hanglog_seq;
    uint32_t hanglog_first_id, hanglog_last_id;
+   struct tu_hanglog_entry *hanglog_last_draw;
    uint32_t synchack_draws;
    uint32_t hanglog_instances;
    uint32_t hanglog_count;

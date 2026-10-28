@@ -784,6 +784,38 @@ tu_hanglog_record_ib(struct tu_hanglog_entry *e, const struct tu_cs *cs)
    e->ib_off = off;
 }
 
+
+/* TU_HANGLOG: draw parameters for the IB map.
+ * qfirst = firstIndex/firstVertex, qcount = max_index_count (indexed),
+ * qtype = vertexOffset, qflags = indexed | index_size << 1 | topology << 4 |
+ * primitive restart << 12.
+ */
+static std::atomic<uint32_t> tu_hanglog_idx_oob{0};
+static void
+tu_hanglog_draw_params(struct tu_cmd_buffer *cmd, bool indexed, uint32_t first,
+                       uint32_t count, int32_t vtx_off)
+{
+   if (likely(!tu_hanglog_enabled) || !cmd->hanglog_last_draw)
+      return;
+   struct tu_hanglog_entry *e = cmd->hanglog_last_draw;
+   cmd->hanglog_last_draw = NULL;
+   const struct vk_dynamic_graphics_state *ds = &cmd->vk.dynamic_graphics_state;
+   e->qfirst = first;
+   e->qcount = indexed ? cmd->state.max_index_count : 0;
+   e->qtype = (uint32_t) vtx_off;
+   e->qflags = (indexed ? 1u : 0u) | ((uint32_t) (cmd->state.index_size & 7) << 1) |
+               ((uint32_t) (ds->ia.primitive_topology & 0xff) << 4) |
+               (ds->ia.primitive_restart_enable ? 1u << 12 : 0);
+   if (indexed && ((uint64_t) first + count > cmd->state.max_index_count ||
+                   !cmd->state.index_va)) {
+      uint32_t n = tu_hanglog_idx_oob.fetch_add(1, std::memory_order_relaxed);
+      if (n < 20 || (n & (n - 1)) == 0)
+         mesa_logw("TU_HANGLOG: INDEX OOB #%u: draw id %u first %u count %u max %u va 0x%" PRIx64 " isz %u vs=%s fs=%s",
+                   n + 1, e->id, first, count, cmd->state.max_index_count,
+                   cmd->state.index_va, cmd->state.index_size, e->vs, e->fs);
+   }
+}
+
 static thread_local struct tu_hanglog_entry *tu_hanglog_last_event;
 
 static void
@@ -4904,6 +4936,7 @@ tu_cmd_buffer_begin(struct tu_cmd_buffer *cmd_buffer,
 
    cmd_buffer->hanglog_seq = 0;
    cmd_buffer->hanglog_first_id = cmd_buffer->hanglog_last_id = 0;
+   cmd_buffer->hanglog_last_draw = NULL;
 
    memset(&cmd_buffer->state, 0, sizeof(cmd_buffer->state));
    vk_dynamic_graphics_state_init(&cmd_buffer->vk.dynamic_graphics_state);
@@ -9097,6 +9130,9 @@ tu_hanglog_mark(struct tu_cmd_buffer *cmd, struct tu_cs *cs, uint8_t kind)
    e->rp = cmd->hanglog_rp;
    e->cmd_seq = cmd->hanglog_seq;
    e->idx = cmd->hanglog_idx++;
+   e->qpool = NULL;
+   e->qfirst = e->qcount = e->qflags = e->qtype = 0;
+   cmd->hanglog_last_draw = e;
    e->uav_mask = 0;
    if (kind >= 3) {
       const struct tu_shader *sh = cmd->state.shaders[MESA_SHADER_COMPUTE];
@@ -9904,6 +9940,7 @@ tu_CmdDraw(VkCommandBuffer commandBuffer,
 
    cmd->hanglog_instances = instanceCount;
    tu6_draw_common<CHIP>(cmd, cs, false, vertexCount);
+   tu_hanglog_draw_params(cmd, false, firstVertex, vertexCount, 0);
 
    tu_cs_emit_pkt7(cs, CP_DRAW_INDX_OFFSET, 3);
    tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_AUTO_INDEX));
@@ -9979,6 +10016,7 @@ tu_CmdDrawIndexed(VkCommandBuffer commandBuffer,
 
    cmd->hanglog_instances = instanceCount;
    tu6_draw_common<CHIP>(cmd, cs, true, indexCount);
+   tu_hanglog_draw_params(cmd, true, firstIndex, indexCount, vertexOffset);
 
    tu_cs_emit_pkt7(cs, CP_DRAW_INDX_OFFSET, 7);
    tu_cs_emit(cs, tu_draw_initiator(cmd, DI_SRC_SEL_DMA));
