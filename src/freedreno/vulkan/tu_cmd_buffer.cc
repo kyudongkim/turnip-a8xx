@@ -1754,6 +1754,19 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
       return true;
    }
 
+   /* TU_SYSMEM_REST=1: every pass not forced to GMEM by a TU_GMEM_* option
+    * is rendered in sysmem (no autotune), so bisection tests stay clean.
+    */
+   {
+      static int rest = -1;
+      if (unlikely(rest < 0))
+         rest = debug_get_bool_option("TU_SYSMEM_REST", false);
+      if (rest) {
+         cmd->state.rp.force_render_mode_reason = "TU_SYSMEM_REST";
+         return true;
+      }
+   }
+
    tu_autotune::render_mode optimal_mode =
       cmd->device->autotune->get_optimal_mode(cmd, rp_ctx, rp_key);
 
