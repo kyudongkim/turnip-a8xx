@@ -52,6 +52,20 @@ safe_ioctl(int fd, unsigned long request, void *arg)
    return ret;
 }
 
+/* TU_KGSL_IGNORE_FAULTS=1: when KGSL reports that the context faulted
+ * (EPROTO on submit/wait, or a guilty reset status) but the context is still
+ * usable, keep going instead of reporting VK_ERROR_DEVICE_LOST. The kernel
+ * has already recovered the GPU at that point.
+ */
+static bool
+kgsl_ignore_faults(void)
+{
+   static int v = -1;
+   if (unlikely(v < 0))
+      v = debug_get_bool_option("TU_KGSL_IGNORE_FAULTS", false);
+   return v;
+}
+
 static int
 kgsl_submitqueue_new(struct tu_device *dev, struct tu_queue *queue)
 {
@@ -949,8 +963,18 @@ wait_timestamp_safe(struct tu_device *device, unsigned int context_id, unsigned 
          return VK_SUCCESS;
 
       const int error = errno;
-      if (error != EINTR && error != EAGAIN)
+      if (error == EPROTO && kgsl_ignore_faults()) {
+         mesa_logw("TU_HANGLOG: wait on ctx %u ts %u returned EPROTO -> ignored, retrying",
+                   context_id, timestamp);
+         continue;
+      }
+      if (error != EINTR && error != EAGAIN) {
+         if (tu_hanglog_enabled)
+            mesa_logw("TU_HANGLOG: wait on ctx %u ts %u failed: %s (errno %d), marker %u",
+                      context_id, timestamp, strerror(error), error,
+                      device->global_bo_map->hanglog_marker);
          return kgsl_timestamp_error(device, context_id, timestamp, "wait", error);
+      }
    }
 }
 
@@ -1739,6 +1763,13 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
       const int error = errno;
       /* EPROTO - Device faulted since the last check. */
       profiling_submitted = profiling_buffer && (ret == 0 || error == EPROTO);
+      if (ret && (tu_hanglog_enabled || kgsl_ignore_faults()))
+         mesa_logw("TU_HANGLOG: submit on ctx %u returned %s (errno %d), ts %u, marker %u%s",
+                   queue->msm_queue_id, strerror(error), error, req.timestamp,
+                   queue->device->global_bo_map->hanglog_marker,
+                   (error == EPROTO && kgsl_ignore_faults()) ? " -> ignored" : "");
+      if (ret && error == EPROTO && kgsl_ignore_faults())
+         ret = 0;
       if (ret) {
          kgsl_syncobj_destroy(&wait_sync);
          result = vk_device_set_lost(&queue->device->vk, "submit failed: %s\n", strerror(error));
@@ -2006,9 +2037,19 @@ hanglog_thread(void *data)
       }
    }
 
+   bool lost_reported = false;
    while (!dev->hanglog_stop.load(std::memory_order_acquire)) {
       usleep(250 * 1000);
       int64_t now = os_time_get_nano();
+      if (!lost_reported && vk_device_is_lost_no_report(&dev->vk)) {
+         lost_reported = true;
+         uint32_t marker = dev->global_bo_map->hanglog_marker;
+         mesa_logw("TU_HANGLOG: DEVICE LOST reported to the app; CP marker %u", marker);
+         for (int k = 3; k >= 1; k--)
+            if (marker > (uint32_t) k)
+               hanglog_print_entry("before", marker - k);
+         hanglog_print_entry("AT", marker);
+      }
       for (unsigned i = 0; i < TU_MAX_QUEUE_FAMILIES; i++) {
          for (int q = 0; q < MIN2(dev->queue_count[i], 8); q++) {
             struct tu_queue *queue = &dev->queues[i][q];
@@ -2100,6 +2141,13 @@ kgsl_device_check_status(struct tu_device *device)
 
          if (value != KGSL_CTX_STAT_NO_ERROR &&
             value != KGSL_CTX_STAT_INNOCENT_CONTEXT_RESET_EXT) {
+            if (tu_hanglog_enabled || kgsl_ignore_faults())
+               mesa_logw("TU_HANGLOG: reset status for ctx %u = 0x%x, marker %u%s",
+                         device->queues[i][q].msm_queue_id, value,
+                         device->global_bo_map->hanglog_marker,
+                         kgsl_ignore_faults() ? " -> ignored" : "");
+            if (kgsl_ignore_faults())
+               continue;
             return vk_device_set_lost(&device->vk, "GPU faulted or hung");
          }
       }
