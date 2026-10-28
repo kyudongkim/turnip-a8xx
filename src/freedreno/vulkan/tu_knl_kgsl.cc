@@ -2239,6 +2239,7 @@ hanglog_thread(void *data)
       static int64_t last_stats = 0;
       if (now - last_stats > 60ll * 1000000000ll) {
          last_stats = now;
+         const long long stat_t = hanglog_wall_ms();
          static const char *fn[] = { "vsuav", "fsuav", "marker", "indirect", "query",
             "timestamp", "barrier", "depthwrite", "blend", "many", "msaa" };
          for (int split = 1; split >= 0; split--) {
@@ -2254,7 +2255,7 @@ hanglog_thread(void *data)
                         strncat(names, ",", sizeof(names) - strlen(names) - 1);
                      }
                   mesa_logw("TU_HANGLOG: t=%lld passstat %s %s feat 0x%03x {%s} count %u",
-                            hanglog_wall_ms(), split ? "SPLIT" : "plain",
+                            stat_t, split ? "SPLIT" : "plain",
                             sm ? "SYSMEM" : "GMEM", m, names, c);
                }
             }

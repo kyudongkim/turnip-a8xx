@@ -1537,8 +1537,13 @@ enum {
    TU_FEAT_MSAA = 1u << 10,
 };
 
+struct tu_feat_spec {
+   uint32_t n;
+   uint32_t group[16]; /* a pass matches if (feat & group) == group for any group */
+};
+
 static uint32_t
-tu_feat_parse(const char *v)
+tu_feat_bit(const char *t)
 {
    static const struct { const char *n; uint32_t b; } names[] = {
       { "vsuav", TU_FEAT_VSUAV }, { "fsuav", TU_FEAT_FSUAV },
@@ -1548,17 +1553,45 @@ tu_feat_parse(const char *v)
       { "blend", TU_FEAT_BLEND }, { "many", TU_FEAT_MANY },
       { "msaa", TU_FEAT_MSAA },
    };
-   uint32_t m = 0;
+   for (unsigned i = 0; i < ARRAY_SIZE(names); i++)
+      if (!strcmp(t, names[i].n))
+         return names[i].b;
+   return 0;
+}
+
+/* "a,b+c" -> groups {a}, {b,c} */
+static struct tu_feat_spec
+tu_feat_parse(const char *v)
+{
+   struct tu_feat_spec sp = {};
    if (!v)
-      return 0;
+      return sp;
    char buf[256];
    snprintf(buf, sizeof(buf), "%s", v);
-   for (char *save = NULL, *t = strtok_r(buf, ",", &save); t;
-        t = strtok_r(NULL, ",", &save))
-      for (unsigned i = 0; i < ARRAY_SIZE(names); i++)
-         if (!strcmp(t, names[i].n))
-            m |= names[i].b;
-   return m;
+   for (char *save = NULL, *t = strtok_r(buf, ",", &save); t && sp.n < 16;
+        t = strtok_r(NULL, ",", &save)) {
+      uint32_t g = 0;
+      bool ok = true;
+      for (char *s2 = NULL, *u = strtok_r(t, "+", &s2); u;
+           u = strtok_r(NULL, "+", &s2)) {
+         uint32_t b = tu_feat_bit(u);
+         if (!b)
+            ok = false;
+         g |= b;
+      }
+      if (ok && g)
+         sp.group[sp.n++] = g;
+   }
+   return sp;
+}
+
+static bool
+tu_feat_match(const struct tu_feat_spec *sp, uint32_t feat)
+{
+   for (uint32_t i = 0; i < sp->n; i++)
+      if ((feat & sp->group[i]) == sp->group[i])
+         return true;
+   return false;
 }
 
 /* Record what a render pass contains (for TU_GMEM_FEAT/TU_GMEM_MERGED). */
@@ -1668,7 +1701,7 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
     */
    {
       static int mode = -1; /* 0 off, 1 all, 2 depth, 3 nodepth, 4 features */
-      static uint32_t mmask = 0, fmask = 0;
+      static struct tu_feat_spec mspec, fspec;
       if (unlikely(mode < 0)) {
          const char *v = os_get_option("TU_GMEM_MERGED");
          if (!v || !*v || !strcmp(v, "0") || !strcmp(v, "false"))
@@ -1677,24 +1710,24 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
             mode = 2;
          else if (!strcmp(v, "nodepth"))
             mode = 3;
-         else if ((mmask = tu_feat_parse(v)))
+         else if ((mspec = tu_feat_parse(v)).n)
             mode = 4;
          else
             mode = 1;
-         fmask = tu_feat_parse(os_get_option("TU_GMEM_FEAT"));
+         fspec = tu_feat_parse(os_get_option("TU_GMEM_FEAT"));
       }
       if (cmd->state.rp.split_pass && mode) {
          bool has_depth = cmd->state.subpass &&
             cmd->state.subpass->depth_stencil_attachment.attachment !=
                VK_ATTACHMENT_UNUSED;
          if (mode == 1 || (mode == 2 && has_depth) || (mode == 3 && !has_depth) ||
-             (mode == 4 && (cmd->state.rp.feat & mmask))) {
+             (mode == 4 && tu_feat_match(&mspec, cmd->state.rp.feat))) {
             cmd->state.rp.force_render_mode_reason = "TU_GMEM_MERGED";
             tu_gmem_for_hits.fetch_add(1, std::memory_order_relaxed);
             return false;
          }
       }
-      if (fmask && (cmd->state.rp.feat & fmask)) {
+      if (tu_feat_match(&fspec, cmd->state.rp.feat)) {
          cmd->state.rp.force_render_mode_reason = "TU_GMEM_FEAT";
          tu_gmem_for_hits.fetch_add(1, std::memory_order_relaxed);
          return false;
