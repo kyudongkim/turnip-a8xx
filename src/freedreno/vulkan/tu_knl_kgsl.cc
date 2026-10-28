@@ -969,7 +969,7 @@ wait_timestamp_safe(struct tu_device *device, unsigned int context_id, unsigned 
          continue;
       }
       if (error != EINTR && error != EAGAIN) {
-         if (tu_hanglog_enabled)
+         if (tu_hanglog_enabled && error != ETIMEDOUT)
             mesa_logw("TU_HANGLOG: wait on ctx %u ts %u failed: %s (errno %d), marker %u",
                       context_id, timestamp, strerror(error), error,
                       device->global_bo_map->hanglog_marker);
@@ -1930,6 +1930,8 @@ hanglog_kind_str(uint8_t k)
    case 6: return "CCU->GMEM";
    case 7: return "RENDER-START(SYSMEM)";
    case 8: return "RENDER-START(GMEM)";
+   case 9: return "SYSMEM-CLEAR(2D)";
+   case 10: return "SYSMEM-CLEAR(3D)";
    default: return "?";
    }
 }

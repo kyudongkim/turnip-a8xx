@@ -5323,6 +5323,32 @@ clear_sysmem_attachment(struct tu_cmd_buffer *cmd,
    const VkClearValue *value = &cmd->state.clear_values[a];
    if (cmd->state.pass->attachments[a].samples > 1)
       ops = &r3d_ops<CHIP>;
+   /* TU_SYSMEM_CLEAR_3D=1: clear sysmem attachments with the 3D engine
+    * instead of the 2D blitter (A2D).
+    */
+   {
+      static int force3d = -1;
+      if (unlikely(force3d < 0))
+         force3d = debug_get_bool_option("TU_SYSMEM_CLEAR_3D", false);
+      if (force3d)
+         ops = &r3d_ops<CHIP>;
+   }
+   if (unlikely(tu_hanglog_enabled)) {
+      uint32_t id = tu_hanglog_next_id();
+      struct tu_hanglog_entry *e = &tu_hanglog_ring[id & (TU_HANGLOG_RING - 1)];
+      memset(e, 0, sizeof(*e));
+      e->id = id;
+      e->kind = ops == &r3d_ops<CHIP> ? 10 : 9;
+      e->cmd_seq = cmd->hanglog_seq;
+      e->rp = cmd->hanglog_rp;
+      e->color_fmt = (uint16_t) vk_format;
+      e->samples = (uint8_t) cmd->state.pass->attachments[a].samples;
+      e->w = (uint16_t) MIN2(cmd->state.render_areas[0].extent.width, 65535u);
+      e->h = (uint16_t) MIN2(cmd->state.render_areas[0].extent.height, 65535u);
+      tu_cs_emit_pkt7(cs, CP_MEM_WRITE, 3);
+      tu_cs_emit_qw(cs, global_iova(cmd, hanglog_marker));
+      tu_cs_emit(cs, id);
+   }
    bool e5b9g9r9_as_u32 =
       vk_format == VK_FORMAT_E5B9G9R9_UFLOAT_PACK32 && ops == &r2d_ops<CHIP>;
 
