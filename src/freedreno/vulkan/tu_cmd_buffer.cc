@@ -11462,6 +11462,25 @@ tu_CmdWriteBufferMarker2AMD(VkCommandBuffer commandBuffer,
 
    bool is_top_of_pipe = !(pipelineStage & ~top_of_pipe_flags);
 
+   /* TU_MARKER_INRP=memwrite: inside a render pass, write bottom-of-pipe
+    * markers with WAIT_FOR_IDLE + CP_MEM_WRITE instead of an RB_DONE_TS
+    * event. TU_MARKER_INRP=top: plain CP_MEM_WRITE (no wait).
+    */
+   bool marker_wfi = false;
+   if (cmd->state.pass && !is_top_of_pipe) {
+      static int mode = -1; /* 0 off, 1 memwrite, 2 top */
+      if (unlikely(mode < 0)) {
+         const char *m = os_get_option("TU_MARKER_INRP");
+         mode = (m && !strcmp(m, "memwrite")) ? 1 : (m && !strcmp(m, "top")) ? 2 : 0;
+      }
+      if (mode) {
+         is_top_of_pipe = true;
+         marker_wfi = mode == 1;
+      }
+   }
+   if (marker_wfi)
+      cache->flush_bits |= TU_CMD_FLAG_WAIT_FOR_IDLE | TU_CMD_FLAG_WAIT_MEM_WRITES;
+
    /* We have to WFI only if we flushed CCU here and are using CP_MEM_WRITE.
     * Otherwise:
     * - We do CP_EVENT_WRITE(RB_DONE_TS) which should wait for flushes;
