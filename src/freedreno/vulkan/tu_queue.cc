@@ -477,6 +477,18 @@ queue_submit(struct vk_queue *_queue, struct vk_queue_submit *vk_submit)
          device, cmd_buffers, cmdbuf_count, &u_trace_submission_data);
    }
 
+   if (unlikely(tu_hanglog_enabled)) {
+      tu_hanglog_pending.n = 0;
+      tu_hanglog_pending.ncmds = cmdbuf_count;
+      for (uint32_t i = 0; i < cmdbuf_count &&
+                           i < TU_HANGLOG_SUBMIT_MAX; i++) {
+         tu_hanglog_pending.seq[i] = cmd_buffers[i]->hanglog_seq;
+         tu_hanglog_pending.first[i] = cmd_buffers[i]->hanglog_first_id;
+         tu_hanglog_pending.last[i] = cmd_buffers[i]->hanglog_last_id;
+         tu_hanglog_pending.n = i + 1;
+      }
+   }
+
    for (uint32_t i = 0; i < cmdbuf_count; i++) {
       struct tu_cmd_buffer *cmd_buffer = cmd_buffers[i];
       struct tu_cs *cs = &cmd_buffer->cs;

@@ -4,6 +4,7 @@
  */
 
 #include "tu_util.h"
+#include "util/os_time.h"
 
 #include <errno.h>
 #include <stdarg.h>
@@ -82,6 +83,30 @@ std::atomic<uint32_t> tu_gmem_for_hits{0};
 struct tu_hanglog_entry tu_hanglog_ring[TU_HANGLOG_RING];
 struct tu_hanglog_rpmode tu_hanglog_rpmodes[TU_HANGLOG_RPRING];
 static std::atomic<uint32_t> tu_hanglog_counter{1};
+static std::atomic<uint32_t> tu_hanglog_seq_counter{1};
+static std::atomic<uint32_t> tu_hanglog_bo_counter{0};
+struct tu_hanglog_submit tu_hanglog_submits[TU_HANGLOG_SUBMIT_RING];
+thread_local struct tu_hanglog_submit tu_hanglog_pending;
+struct tu_hanglog_bo tu_hanglog_bos[TU_HANGLOG_BO_RING];
+
+uint32_t
+tu_hanglog_next_seq(void)
+{
+   return tu_hanglog_seq_counter.fetch_add(1, std::memory_order_relaxed);
+}
+
+void
+tu_hanglog_bo_event(uint8_t op, uint64_t iova, uint64_t size, const char *name)
+{
+   uint32_t i = tu_hanglog_bo_counter.fetch_add(1, std::memory_order_relaxed);
+   struct tu_hanglog_bo *b = &tu_hanglog_bos[i & (TU_HANGLOG_BO_RING - 1)];
+   b->op = 0;
+   b->iova = iova;
+   b->size = size;
+   b->t_ns = os_time_get_nano();
+   snprintf(b->name, sizeof(b->name), "%s", name ? name : "");
+   __atomic_store_n(&b->op, op, __ATOMIC_RELEASE);
+}
 uint32_t
 tu_hanglog_next_id(void)
 {

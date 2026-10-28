@@ -146,6 +146,31 @@ extern bool tu_hanglog_enabled;
 extern std::atomic<uint32_t> tu_gmem_for_hits;
 extern struct tu_hanglog_entry tu_hanglog_ring[TU_HANGLOG_RING];
 uint32_t tu_hanglog_next_id(void);
+uint32_t tu_hanglog_next_seq(void);
+
+/* Per-submit record: which command buffers went into kgsl timestamp ts. */
+#define TU_HANGLOG_SUBMIT_MAX 24
+#define TU_HANGLOG_SUBMIT_RING 1024u
+struct tu_hanglog_submit {
+   uint32_t ts, ctx, n, ncmds;
+   int64_t t_ns;
+   uint32_t seq[TU_HANGLOG_SUBMIT_MAX];
+   uint32_t first[TU_HANGLOG_SUBMIT_MAX];
+   uint32_t last[TU_HANGLOG_SUBMIT_MAX];
+};
+extern struct tu_hanglog_submit tu_hanglog_submits[TU_HANGLOG_SUBMIT_RING];
+extern thread_local struct tu_hanglog_submit tu_hanglog_pending;
+
+/* BO alloc/free history, to resolve GPU page fault addresses. */
+#define TU_HANGLOG_BO_RING (1u << 15)
+struct tu_hanglog_bo {
+   uint64_t iova, size;
+   int64_t t_ns;
+   uint8_t op; /* 1 alloc, 2 free, 3 import */
+   char name[23];
+};
+extern struct tu_hanglog_bo tu_hanglog_bos[TU_HANGLOG_BO_RING];
+void tu_hanglog_bo_event(uint8_t op, uint64_t iova, uint64_t size, const char *name);
 
 /*
  * Note: tu_env_init() must be called before using the TU_DEBUG* macro.

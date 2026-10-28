@@ -338,6 +338,8 @@ kgsl_align_flag(uint64_t align)
    return 0;
 }
 
+static void hanglog_query_faults(struct tu_device *dev, uint32_t ctx);
+
 static VkResult
 kgsl_bo_init(struct tu_device *dev,
              struct vk_object_base *base,
@@ -436,6 +438,9 @@ kgsl_bo_init(struct tu_device *dev,
 
    *out_bo = bo;
 
+   if (unlikely(tu_hanglog_enabled))
+      tu_hanglog_bo_event(1, bo->iova, bo->size, name);
+
    TU_RMV(bo_allocate, dev, bo);
    if (flags & TU_BO_ALLOC_INTERNAL_RESOURCE) {
       TU_RMV(internal_resource_create, dev, bo);
@@ -511,6 +516,8 @@ kgsl_bo_init_dmabuf(struct tu_device *dev,
    tu_dump_bo_init(dev, bo);
 
    *out_bo = bo;
+   if (unlikely(tu_hanglog_enabled))
+      tu_hanglog_bo_event(3, bo->iova, bo->size, "dmabuf");
 
    return VK_SUCCESS;
 }
@@ -561,6 +568,8 @@ kgsl_bo_finish(struct tu_device *dev, struct tu_bo *bo)
 
    tu_debug_bos_del(dev, bo);
    tu_dump_bo_del(dev, bo);
+   if (unlikely(tu_hanglog_enabled))
+      tu_hanglog_bo_event(2, bo->iova, bo->size, NULL);
 
    if (bo->map) {
       TU_RMV(bo_unmap, dev, bo);
@@ -973,6 +982,11 @@ wait_timestamp_safe(struct tu_device *device, unsigned int context_id, unsigned 
             mesa_logw("TU_HANGLOG: wait on ctx %u ts %u failed: %s (errno %d), marker %u",
                       context_id, timestamp, strerror(error), error,
                       device->global_bo_map->hanglog_marker);
+         if (tu_hanglog_enabled && error == EDEADLK) {
+            static std::atomic<bool> once{false};
+            if (!once.exchange(true))
+               hanglog_query_faults(device, context_id);
+         }
          return kgsl_timestamp_error(device, context_id, timestamp, "wait", error);
       }
    }
@@ -1777,6 +1791,14 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
       }
       timestamp = req.timestamp;
       if (unlikely(tu_hanglog_enabled)) {
+         struct tu_hanglog_submit *hs =
+            &tu_hanglog_submits[timestamp & (TU_HANGLOG_SUBMIT_RING - 1)];
+         *hs = tu_hanglog_pending;
+         hs->ts = timestamp;
+         hs->ctx = queue->msm_queue_id;
+         hs->t_ns = os_time_get_nano();
+         tu_hanglog_pending.n = 0;
+         tu_hanglog_pending.ncmds = 0;
          queue->hanglog_last_ts.store(timestamp, std::memory_order_relaxed);
          queue->hanglog_has_submit.store(true, std::memory_order_release);
       }
@@ -1957,6 +1979,101 @@ hanglog_print_entry(const char *tag, uint32_t id)
 }
 
 static void
+hanglog_lookup_addr(uint64_t addr)
+{
+   /* newest first */
+   int printed = 0;
+   uint64_t best_dist = UINT64_MAX;
+   const struct tu_hanglog_bo *best = NULL;
+   int64_t now = os_time_get_nano();
+   for (uint32_t i = 0; i < TU_HANGLOG_BO_RING && printed < 6; i++) {
+      const struct tu_hanglog_bo *b = &tu_hanglog_bos[i];
+      uint8_t op = __atomic_load_n(&b->op, __ATOMIC_ACQUIRE);
+      if (!op)
+         continue;
+      if (addr >= b->iova && addr < b->iova + b->size) {
+         mesa_logw("TU_HANGLOG:       addr in BO %s iova 0x%" PRIx64 " size 0x%" PRIx64 " (%s, %.3f s ago) offset 0x%" PRIx64,
+                   op == 1 ? "ALLOC" : op == 2 ? "FREE" : "IMPORT",
+                   b->iova, b->size, b->name, (now - b->t_ns) / 1e9, addr - b->iova);
+         printed++;
+      } else if (b->iova > addr && b->iova - addr < best_dist) {
+         best_dist = b->iova - addr;
+         best = b;
+      } else if (b->iova + b->size <= addr && addr - (b->iova + b->size) < best_dist) {
+         best_dist = addr - (b->iova + b->size);
+         best = b;
+      }
+   }
+   if (!printed) {
+      mesa_logw("TU_HANGLOG:       addr not inside any recorded BO");
+      if (best)
+         mesa_logw("TU_HANGLOG:       nearest BO iova 0x%" PRIx64 " size 0x%" PRIx64 " (%s op %u) distance 0x%" PRIx64,
+                   best->iova, best->size, best->name, best->op, best_dist);
+   }
+}
+
+static const struct tu_hanglog_submit *
+hanglog_find_submit(uint32_t ctx, uint32_t ts)
+{
+   const struct tu_hanglog_submit *hs =
+      &tu_hanglog_submits[ts & (TU_HANGLOG_SUBMIT_RING - 1)];
+   if (hs->ts != ts || hs->ctx != ctx)
+      return NULL;
+   return hs;
+}
+
+/* Print what went into kgsl timestamp ts. detail: also list pass-level
+ * events of each command buffer, and the tail of draws.
+ */
+static void
+hanglog_print_submit(const char *tag, uint32_t ctx, uint32_t ts,
+                     uint32_t marker, bool detail)
+{
+   const struct tu_hanglog_submit *hs = hanglog_find_submit(ctx, ts);
+   if (!hs) {
+      mesa_logw("TU_HANGLOG:   [%s] submit ts %u: not recorded (aux/bind or overwritten)", tag, ts);
+      return;
+   }
+   mesa_logw("TU_HANGLOG:   [%s] submit ts %u: %u cmdbuf(s)%s, %.3f s ago",
+             tag, ts, hs->ncmds, hs->ncmds > hs->n ? " (truncated)" : "",
+             (os_time_get_nano() - hs->t_ns) / 1e9);
+   for (uint32_t c = 0; c < hs->n; c++) {
+      bool has_marker = marker && marker >= hs->first[c] && marker <= hs->last[c];
+      mesa_logw("TU_HANGLOG:     cmdbuf#%u ids %u..%u%s", hs->seq[c],
+                hs->first[c], hs->last[c], has_marker ? "  <-- CP marker inside" : "");
+      if (!detail || !hs->first[c])
+         continue;
+      uint32_t first = hs->first[c], last = hs->last[c];
+      if (last - first >= TU_HANGLOG_RING)
+         first = last - TU_HANGLOG_RING + 1;
+      unsigned draws = 0, disp = 0, shown = 0;
+      for (uint32_t id = first; id && id <= last; id++) {
+         const struct tu_hanglog_entry *e = &tu_hanglog_ring[id & (TU_HANGLOG_RING - 1)];
+         if (e->id != id || (e->cmd_seq != hs->seq[c] && e->kind < 5))
+            continue;
+         if (e->kind <= 2)
+            draws++;
+         else if (e->kind <= 4)
+            disp++;
+         else if (shown < 40) {
+            hanglog_print_entry("      ev", id);
+            shown++;
+         }
+      }
+      mesa_logw("TU_HANGLOG:       cmdbuf#%u: %u draws, %u dispatches", hs->seq[c], draws, disp);
+      /* last few draws/dispatches of this command buffer */
+      unsigned tail = 0;
+      for (uint32_t id = last; id >= first && id && tail < 6; id--) {
+         const struct tu_hanglog_entry *e = &tu_hanglog_ring[id & (TU_HANGLOG_RING - 1)];
+         if (e->id != id || e->cmd_seq != hs->seq[c] || e->kind > 4)
+            continue;
+         hanglog_print_entry("      tail", id);
+         tail++;
+      }
+   }
+}
+
+static void
 hanglog_query_faults(struct tu_device *dev, uint32_t ctx)
 {
    struct kgsl_context_property_fault f = {};
@@ -2004,14 +2121,25 @@ hanglog_query_faults(struct tu_device *dev, uint32_t ctx)
          };
          if (!safe_ioctl(dev->fd, IOCTL_KGSL_GET_FAULT_REPORT, &r2)) {
             for (uint32_t j = 0; j < c; j++)
-               mesa_logw("TU_HANGLOG:     pagefault addr 0x%" PRIx64 " type 0x%x",
-                         (uint64_t) pf[j].fault_addr, pf[j].fault_type);
+            {
+               mesa_logw("TU_HANGLOG:     pagefault addr 0x%" PRIx64 " type 0x%x%s%s%s%s",
+                         (uint64_t) pf[j].fault_addr, pf[j].fault_type,
+                         (pf[j].fault_type & KGSL_PAGEFAULT_TYPE_READ) ? " READ" : "",
+                         (pf[j].fault_type & KGSL_PAGEFAULT_TYPE_WRITE) ? " WRITE" : "",
+                         (pf[j].fault_type & KGSL_PAGEFAULT_TYPE_TRANSLATION) ? " TRANSLATION" : "",
+                         (pf[j].fault_type & KGSL_PAGEFAULT_TYPE_PERMISSION) ? " PERMISSION" : "");
+               hanglog_lookup_addr(pf[j].fault_addr);
+            }
+         } else {
+            mesa_logw("TU_HANGLOG:     pagefault details read failed (%s)", strerror(errno));
          }
       }
    }
 }
 
 struct hanglog_qstate {
+   int32_t last_faults;
+   uint32_t last_fault_ts;
    uint32_t last_retired;
    int64_t since_ns;
    bool reported;
@@ -2055,6 +2183,10 @@ hanglog_thread(void *data)
             if (marker > (uint32_t) k)
                hanglog_print_entry("before", marker - k);
          hanglog_print_entry("AT", marker);
+         for (unsigned i = 0; i < TU_MAX_QUEUE_FAMILIES; i++)
+            for (int q = 0; q < MIN2(dev->queue_count[i], 8); q++)
+               if (!vk_queue_is_emulated(&dev->queues[i][q].vk))
+                  hanglog_query_faults(dev, dev->queues[i][q].msm_queue_id);
       }
       for (unsigned i = 0; i < TU_MAX_QUEUE_FAMILIES; i++) {
          for (int q = 0; q < MIN2(dev->queue_count[i], 8); q++) {
@@ -2066,6 +2198,34 @@ hanglog_thread(void *data)
             if (!s->since_ns)
                s->since_ns = os_time_get_nano();
             uint32_t submitted = queue->hanglog_last_ts.load(std::memory_order_relaxed);
+            {
+               struct kgsl_context_property_fault f = {};
+               struct kgsl_context_property cp = {
+                  .data = (uint64_t)(uintptr_t)&f,
+                  .size = sizeof(f),
+                  .type = KGSL_CONTEXT_PROP_FAULTS,
+                  .contextid = queue->msm_queue_id,
+               };
+               if (get_kgsl_prop(dev->fd, KGSL_PROP_CONTEXT_PROPERTY, &cp, sizeof(cp)) == VK_SUCCESS &&
+                   (f.faults != s->last_faults || f.timestamp != s->last_fault_ts)) {
+                  struct kgsl_cmdstream_readtimestamp_ctxtid r0 = {
+                     .context_id = queue->msm_queue_id,
+                     .type = KGSL_TIMESTAMP_RETIRED,
+                  };
+                  safe_ioctl(dev->fd, IOCTL_KGSL_CMDSTREAM_READTIMESTAMP_CTXTID, &r0);
+                  uint32_t marker = dev->global_bo_map->hanglog_marker;
+                  mesa_logw("TU_HANGLOG: ctx %u NEW KERNEL FAULT: count %d -> %d, fault ts %u (retired %u, submitted %u, CP marker %u)",
+                            queue->msm_queue_id, s->last_faults, f.faults,
+                            f.timestamp, r0.timestamp, submitted, marker);
+                  s->last_faults = f.faults;
+                  s->last_fault_ts = f.timestamp;
+                  hanglog_print_submit("fault-1", queue->msm_queue_id, f.timestamp - 1, 0, false);
+                  hanglog_print_submit("FAULT", queue->msm_queue_id, f.timestamp, marker, true);
+                  hanglog_print_submit("fault+1", queue->msm_queue_id, f.timestamp + 1, marker, false);
+                  hanglog_print_entry("marker", marker);
+                  hanglog_query_faults(dev, queue->msm_queue_id);
+               }
+            }
             struct kgsl_cmdstream_readtimestamp_ctxtid rd = {
                .context_id = queue->msm_queue_id,
                .type = KGSL_TIMESTAMP_RETIRED,
@@ -2097,6 +2257,9 @@ hanglog_thread(void *data)
                      hanglog_print_entry("before", marker - k);
                hanglog_print_entry("AT", marker);
                hanglog_query_faults(dev, queue->msm_queue_id);
+               hanglog_print_submit("retired", queue->msm_queue_id, rd.timestamp, marker, false);
+               hanglog_print_submit("STUCK", queue->msm_queue_id, rd.timestamp + 1, marker, true);
+               hanglog_print_submit("next", queue->msm_queue_id, rd.timestamp + 2, marker, false);
             }
          }
       }

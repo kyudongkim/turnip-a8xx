@@ -783,6 +783,11 @@ tu_hanglog_mark_event(struct tu_cmd_buffer *cmd, struct tu_cs *cs, uint8_t kind)
    struct tu_hanglog_entry *e = &tu_hanglog_ring[id & (TU_HANGLOG_RING - 1)];
    tu_hanglog_last_event = e;
    memset(e, 0, sizeof(*e));
+   if (!cmd->hanglog_seq)
+      cmd->hanglog_seq = tu_hanglog_next_seq();
+   if (!cmd->hanglog_first_id)
+      cmd->hanglog_first_id = id;
+   cmd->hanglog_last_id = id;
    e->id = id;
    e->kind = kind;
    e->cmd_seq = cmd->hanglog_seq;
@@ -4701,6 +4706,9 @@ tu_cmd_buffer_begin(struct tu_cmd_buffer *cmd_buffer,
 {
    vk_command_buffer_begin(&cmd_buffer->vk, pBeginInfo);
 
+   cmd_buffer->hanglog_seq = 0;
+   cmd_buffer->hanglog_first_id = cmd_buffer->hanglog_last_id = 0;
+
    memset(&cmd_buffer->state, 0, sizeof(cmd_buffer->state));
    vk_dynamic_graphics_state_init(&cmd_buffer->vk.dynamic_graphics_state);
    cmd_buffer->vk.dynamic_graphics_state.vi = &cmd_buffer->state.vi;
@@ -4735,6 +4743,7 @@ tu_BeginCommandBuffer(VkCommandBuffer commandBuffer,
 {
    VK_FROM_HANDLE(tu_cmd_buffer, cmd_buffer, commandBuffer);
    cmd_buffer->hanglog_seq = 0;
+   cmd_buffer->hanglog_first_id = cmd_buffer->hanglog_last_id = 0;
    cmd_buffer->synchack_draws = 0;
    cmd_buffer->hanglog_idx = 0;
    cmd_buffer->hanglog_rp = 0;
@@ -8874,11 +8883,13 @@ template <chip CHIP>
 static void
 tu_hanglog_mark(struct tu_cmd_buffer *cmd, struct tu_cs *cs, uint8_t kind)
 {
-   static std::atomic<uint32_t> seq_counter{1};
    if (!cmd->hanglog_seq)
-      cmd->hanglog_seq = seq_counter.fetch_add(1, std::memory_order_relaxed);
+      cmd->hanglog_seq = tu_hanglog_next_seq();
 
    uint32_t id = tu_hanglog_next_id();
+   if (!cmd->hanglog_first_id)
+      cmd->hanglog_first_id = id;
+   cmd->hanglog_last_id = id;
    struct tu_hanglog_entry *e = &tu_hanglog_ring[id & (TU_HANGLOG_RING - 1)];
    e->id = id;
    e->kind = kind;
