@@ -9080,13 +9080,17 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
     * first (observed with Cyberpunk 2077 via vkd3d-proton on Adreno 830:
     * fences never signal, kgsl recovers every frame). A WAIT_FOR_IDLE before
     * such draws avoids it.
-    * TU_UAV_WFI=all (default) | vs (pre-rasterization stages only) | off
+    * TU_UAV_WFI=all | vs (pre-rasterization stages only) | off (default)
+    * Later testing with kernel fault polling showed it does not prevent the
+    * faults, so it is off unless requested.
     */
    if (CHIP >= A8XX) {
       static int uav_wfi_mode = -1; /* 0 off, 1 vs, 2 all */
       if (unlikely(uav_wfi_mode < 0)) {
          const char *m = os_get_option("TU_UAV_WFI");
-         uav_wfi_mode = !m ? 2 : !strcmp(m, "off") ? 0 : !strcmp(m, "vs") ? 1 : 2;
+         uav_wfi_mode = (!m || !*m || !strcmp(m, "off") || !strcmp(m, "0") ||
+                         !strcmp(m, "false")) ? 0 :
+                        !strcmp(m, "vs") ? 1 : 2;
       }
       if (uav_wfi_mode) {
          const unsigned last = uav_wfi_mode == 2 ? MESA_SHADER_FRAGMENT
