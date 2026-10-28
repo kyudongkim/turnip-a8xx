@@ -4462,6 +4462,10 @@ tu_cmd_render(struct tu_cmd_buffer *cmd_buffer,
 
    tu_autotune::rp_ctx_t rp_ctx = NULL;
    bool sysmem = use_sysmem_rendering(cmd_buffer, &rp_ctx, rp_key);
+   if (unlikely(tu_hanglog_enabled))
+      tu_feat_stats[cmd_buffer->state.rp.split_pass][sysmem]
+                   [cmd_buffer->state.rp.feat & (TU_FEAT_STATS - 1)]
+         .fetch_add(1, std::memory_order_relaxed);
    if (unlikely(tu_hanglog_enabled)) {
       tu_hanglog_mark_event(cmd_buffer, &cmd_buffer->cs, sysmem ? 7 : 8);
       /* describe the pass in the entry we just wrote */

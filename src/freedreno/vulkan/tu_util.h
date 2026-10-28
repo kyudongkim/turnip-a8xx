@@ -148,6 +148,9 @@ tu_hanglog_rp_slot(uint32_t seq, uint32_t rp)
 }
 extern bool tu_hanglog_enabled;
 extern std::atomic<uint32_t> tu_gmem_for_hits;
+/* pass statistics: [split][sysmem] counts per feature mask (11 bits) */
+#define TU_FEAT_STATS 2048
+extern std::atomic<uint32_t> tu_feat_stats[2][2][TU_FEAT_STATS];
 extern struct tu_hanglog_entry tu_hanglog_ring[TU_HANGLOG_RING];
 uint32_t tu_hanglog_next_id(void);
 uint32_t tu_hanglog_next_seq(void);

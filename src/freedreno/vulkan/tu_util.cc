@@ -85,6 +85,7 @@ struct tu_hanglog_rpmode tu_hanglog_rpmodes[TU_HANGLOG_RPRING];
 static std::atomic<uint32_t> tu_hanglog_counter{1};
 static std::atomic<uint32_t> tu_hanglog_seq_counter{1};
 static std::atomic<uint32_t> tu_hanglog_bo_counter{0};
+std::atomic<uint32_t> tu_feat_stats[2][2][TU_FEAT_STATS];
 struct tu_hanglog_submit tu_hanglog_submits[TU_HANGLOG_SUBMIT_RING];
 thread_local struct tu_hanglog_submit tu_hanglog_pending;
 struct tu_hanglog_bo tu_hanglog_bos[TU_HANGLOG_BO_RING];

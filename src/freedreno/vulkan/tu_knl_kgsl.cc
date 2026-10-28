@@ -2236,6 +2236,30 @@ hanglog_thread(void *data)
    while (!dev->hanglog_stop.load(std::memory_order_acquire)) {
       usleep(250 * 1000);
       int64_t now = os_time_get_nano();
+      static int64_t last_stats = 0;
+      if (now - last_stats > 60ll * 1000000000ll) {
+         last_stats = now;
+         static const char *fn[] = { "vsuav", "fsuav", "marker", "indirect", "query",
+            "timestamp", "barrier", "depthwrite", "blend", "many", "msaa" };
+         for (int split = 1; split >= 0; split--) {
+            for (int sm = 1; sm >= 0; sm--) {
+               for (uint32_t m = 0; m < TU_FEAT_STATS; m++) {
+                  uint32_t c = tu_feat_stats[split][sm][m].load(std::memory_order_relaxed);
+                  if (!c)
+                     continue;
+                  char names[160] = "";
+                  for (unsigned b = 0; b < ARRAY_SIZE(fn); b++)
+                     if (m & (1u << b)) {
+                        strncat(names, fn[b], sizeof(names) - strlen(names) - 2);
+                        strncat(names, ",", sizeof(names) - strlen(names) - 1);
+                     }
+                  mesa_logw("TU_HANGLOG: t=%lld passstat %s %s feat 0x%03x {%s} count %u",
+                            hanglog_wall_ms(), split ? "SPLIT" : "plain",
+                            sm ? "SYSMEM" : "GMEM", m, names, c);
+               }
+            }
+         }
+      }
       if (now - last_beat > 10ll * 1000000000ll) {
          last_beat = now;
          for (unsigned i = 0; i < TU_MAX_QUEUE_FAMILIES; i++)
