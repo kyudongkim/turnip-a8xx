@@ -3736,15 +3736,23 @@ tu6_sysmem_render_begin(struct tu_cmd_buffer *cmd, struct tu_cs *cs,
    tu6_emit_window_scissor<CHIP>(cs, 0, 0, fb->width - 1, fb->height - 1);
    tu6_emit_window_offset<CHIP>(cs, 0, 0);
 
+   /* TU_SYSMEM_LRZFB=late: LRZ feedback mask EARLY_Z_LATE_Z in sysmem (what
+    * the gallium driver uses); =none: no LRZ feedback, LRZ writes disabled.
+    */
+   static int lrzfb = -1;
+   if (unlikely(lrzfb < 0)) {
+      const char *v = os_get_option("TU_SYSMEM_LRZFB");
+      lrzfb = !v ? 0 : !strcmp(v, "late") ? 1 : !strcmp(v, "none") ? 2 : 0;
+   }
+   const bool has_fb = cmd->device->physical_device->info->props.has_lrz_feedback;
    tu6_emit_bin_size<CHIP>(cs, 0, 0, {
       .render_mode = RENDERING_PASS,
-      .force_lrz_write_dis =
-         !cmd->device->physical_device->info->props.has_lrz_feedback,
+      .force_lrz_write_dis = !has_fb || lrzfb == 2,
       .buffers_location = BUFFERS_IN_SYSMEM,
       .lrz_feedback_zmode_mask =
-         cmd->device->physical_device->info->props.has_lrz_feedback
-            ? LRZ_FEEDBACK_EARLY_Z_OR_EARLY_Z_LATE_Z
-            : LRZ_FEEDBACK_NONE,
+         (!has_fb || lrzfb == 2) ? LRZ_FEEDBACK_NONE :
+         lrzfb == 1 ? LRZ_FEEDBACK_EARLY_Z_LATE_Z :
+                      LRZ_FEEDBACK_EARLY_Z_OR_EARLY_Z_LATE_Z,
    });
 
    if (CHIP >= A7XX) {
