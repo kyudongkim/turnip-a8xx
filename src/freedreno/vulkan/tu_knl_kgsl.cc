@@ -67,6 +67,81 @@ kgsl_ignore_faults(void)
    return v;
 }
 
+/* GPU clock experiments (DVFS hypothesis):
+ *   TU_KGSL_FREQ=<mhz> or <min>-<max>  KGSL_PROP_DCVS_PROFILE min/max GPU
+ *                                      frequency for this process (pin by
+ *                                      giving one value).
+ *   TU_KGSL_PWR=max|min|<2..100>       per-context KGSL_PROP_PWR_CONSTRAINT,
+ *                                      applied to every submission.
+ */
+static int
+kgsl_pwr_level(void)
+{
+   static int lvl = -2;
+   if (lvl == -2) {
+      const char *v = os_get_option("TU_KGSL_PWR");
+      if (!v || !*v)
+         lvl = -1;
+      else if (!strcmp(v, "max"))
+         lvl = KGSL_CONSTRAINT_PWR_MAX;
+      else if (!strcmp(v, "min"))
+         lvl = KGSL_CONSTRAINT_PWR_MIN;
+      else
+         lvl = CLAMP(atoi(v), KGSL_CONSTRAINT_PWR_PERC_MIN, KGSL_CONSTRAINT_PWR_PERC_MAX);
+   }
+   return lvl;
+}
+
+static void
+kgsl_apply_power_settings(struct tu_device *dev, uint32_t ctx)
+{
+   int fd = dev->physical_device->local_fd;
+
+   static bool freq_done = false;
+   const char *f = os_get_option("TU_KGSL_FREQ");
+   if (f && *f && !freq_done) {
+      freq_done = true;
+      unsigned lo = 0, hi = 0;
+      if (sscanf(f, "%u-%u", &lo, &hi) != 2)
+         hi = lo = (unsigned) atoi(f);
+      struct kgsl_dcvs_attrs attrs;
+      memset(&attrs, 0xff, sizeof(attrs)); /* KGSL_DCVS_ATTR_UNUSED */
+      attrs.min_gpu_freq = lo;
+      attrs.max_gpu_freq = hi;
+      struct kgsl_dcvs_profile prof = {
+         .attrs = (uint64_t)(uintptr_t)&attrs,
+         .attrs_size = sizeof(attrs),
+      };
+      struct kgsl_device_getproperty sp = {
+         .type = KGSL_PROP_DCVS_PROFILE,
+         .value = &prof,
+         .sizebytes = sizeof(prof),
+      };
+      int r = safe_ioctl(fd, IOCTL_KGSL_SETPROPERTY, &sp);
+      mesa_logw("TU_KGSL_FREQ: DCVS profile min %u max %u MHz -> %s",
+                lo, hi, r ? strerror(errno) : "ok");
+   }
+
+   int lvl = kgsl_pwr_level();
+   if (lvl >= 0) {
+      struct kgsl_device_constraint_pwrlevel pl = { .level = (unsigned) lvl };
+      struct kgsl_device_constraint c = {
+         .type = KGSL_CONSTRAINT_PWRLEVEL,
+         .context_id = ctx,
+         .data = &pl,
+         .size = sizeof(pl),
+      };
+      struct kgsl_device_getproperty sp = {
+         .type = KGSL_PROP_PWR_CONSTRAINT,
+         .value = &c,
+         .sizebytes = sizeof(c),
+      };
+      int r = safe_ioctl(fd, IOCTL_KGSL_SETPROPERTY, &sp);
+      mesa_logw("TU_KGSL_PWR: ctx %u power constraint level %d -> %s",
+                ctx, lvl, r ? strerror(errno) : "ok");
+   }
+}
+
 static int
 kgsl_submitqueue_new(struct tu_device *dev, struct tu_queue *queue)
 {
@@ -95,6 +170,8 @@ kgsl_submitqueue_new(struct tu_device *dev, struct tu_queue *queue)
       const char *raw = getenv("TU_KGSL_CTX_FLAGS");
       if (raw)
          req.flags |= (uint32_t) strtoul(raw, NULL, 0);
+      if (kgsl_pwr_level() >= 0)
+         req.flags |= KGSL_CONTEXT_PWR_CONSTRAINT;
       if (pre || type || raw)
          mesa_logi("kgsl: drawctxt flags 0x%x", req.flags);
    }
@@ -107,6 +184,7 @@ kgsl_submitqueue_new(struct tu_device *dev, struct tu_queue *queue)
       if (!ret) {
          mesa_logw("TU_HANGLOG: context %u created with FAULT_INFO", req2.drawctxt_id);
          queue->msm_queue_id = req2.drawctxt_id;
+         kgsl_apply_power_settings(dev, queue->msm_queue_id);
          return 0;
       }
       mesa_logw("TU_HANGLOG: FAULT_INFO context flag rejected (%s), continuing without",
@@ -118,6 +196,7 @@ kgsl_submitqueue_new(struct tu_device *dev, struct tu_queue *queue)
       return ret;
 
    queue->msm_queue_id = req.drawctxt_id;
+   kgsl_apply_power_settings(dev, queue->msm_queue_id);
 
    return 0;
 }
@@ -1910,6 +1989,9 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
          .numsyncs = has_sync != 0 ? 1 : 0,
          .context_id = queue->msm_queue_id,
       };
+
+      if (kgsl_pwr_level() >= 0)
+         req.flags |= KGSL_CMDBATCH_PWR_CONSTRAINT;
 
       if (profiling_buffer) {
          req.flags |= KGSL_CMDBATCH_PROFILING;
