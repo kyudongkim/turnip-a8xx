@@ -1155,6 +1155,18 @@ kgsl_queue_recover(struct tu_queue *queue)
    const uint32_t old_ctx = queue->msm_queue_id;
    const uint32_t vbase = queue->fence >= 0 ? (uint32_t) queue->fence : 0;
    int r = kgsl_submitqueue_new(queue->device, queue);
+   bool old_destroyed = false;
+   if (r) {
+      /* Out of context slots: free the dead one first and retry. */
+      queue->msm_queue_id = old_ctx;
+      mesa_logw("TU_CTX_RECOVER: new context failed (%s), freeing ctx %u and retrying",
+                strerror(errno), old_ctx);
+      struct kgsl_drawctxt_destroy dreq0 = { .drawctxt_id = old_ctx };
+      safe_ioctl(queue->device->physical_device->local_fd,
+                 IOCTL_KGSL_DRAWCTXT_DESTROY, &dreq0);
+      old_destroyed = true;
+      r = kgsl_submitqueue_new(queue->device, queue);
+   }
    if (r) {
       queue->msm_queue_id = old_ctx;
       mesa_logw("TU_CTX_RECOVER: creating a new context failed (%s)", strerror(errno));
@@ -1162,21 +1174,43 @@ kgsl_queue_recover(struct tu_queue *queue)
       return r;
    }
    simple_mtx_lock(&kgsl_xlate_mtx);
+   /* Table full: drop dead entries. Waits on a dropped dead ctx fall
+    * through to the kernel, whose error is treated as signaled.
+    */
+   if (kgsl_nxlate + 2 > ARRAY_SIZE(kgsl_xlate)) {
+      unsigned j = 0;
+      for (unsigned i = 0; i < kgsl_nxlate; i++)
+         if (!kgsl_xlate[i].dead)
+            kgsl_xlate[j++] = kgsl_xlate[i];
+      kgsl_nxlate = j;
+   }
    struct kgsl_ctx_xlate *o = kgsl_xlate_find_locked(old_ctx);
-   if (!o && kgsl_nxlate < ARRAY_SIZE(kgsl_xlate)) {
+   if (!o) {
       o = &kgsl_xlate[kgsl_nxlate++];
       o->ctx = old_ctx;
       o->offset = 0;
    }
-   if (o)
-      o->dead = true;
-   if (kgsl_nxlate < ARRAY_SIZE(kgsl_xlate)) {
-      struct kgsl_ctx_xlate *n = &kgsl_xlate[kgsl_nxlate++];
-      n->ctx = queue->msm_queue_id;
-      n->offset = vbase;
-      n->dead = false;
-   }
+   o->dead = true;
+   /* The kernel recycles context ids once destroyed: reuse the entry.
+    * Every timestamp of the previous owner is <= vbase, so it still
+    * reads as signaled.
+    */
+   struct kgsl_ctx_xlate *n = kgsl_xlate_find_locked(queue->msm_queue_id);
+   if (!n)
+      n = &kgsl_xlate[kgsl_nxlate++];
+   n->ctx = queue->msm_queue_id;
+   n->offset = vbase;
+   n->dead = false;
    simple_mtx_unlock(&kgsl_xlate_mtx);
+
+   /* Free the invalidated kernel context. Leaking them exhausted the KGSL
+    * context slots (ENOSPC) after ~200 recoveries.
+    */
+   struct kgsl_drawctxt_destroy dreq = { .drawctxt_id = old_ctx };
+   if (!old_destroyed && old_ctx != queue->msm_queue_id && safe_ioctl(queue->device->physical_device->local_fd,
+                  IOCTL_KGSL_DRAWCTXT_DESTROY, &dreq))
+      mesa_logw("TU_CTX_RECOVER: destroying ctx %u failed (%s)", old_ctx,
+                strerror(errno));
    queue->safemode_faults = 0;
    static unsigned count = 0;
    mesa_logw("TU_CTX_RECOVER: ctx %u invalidated -> new ctx %u (timestamp base %u, recovery #%u)",
