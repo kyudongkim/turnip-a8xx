@@ -18,6 +18,7 @@
 #include "util/format/u_format_zs.h"
 #include "util/macros.h"
 #include "util/u_math.h"
+#include "util/os_time.h"
 #include "vk_util.h"
 
 /*
@@ -163,6 +164,19 @@ tu_hanglog_rp_slot(uint32_t seq, uint32_t rp)
 extern bool tu_hanglog_enabled;
 extern bool tu_hanglog_lite; /* TU_HANGLOG=lite: fault polling only, no GPU markers */
 extern std::atomic<uint32_t> tu_gmem_for_hits;
+
+/* TU_SAFEMODE=<ms>|1: after the kernel reports a GPU fault on our context,
+ * run in a slow, serialized "safe mode" for <ms> (1 = 3000 ms) so that the
+ * follow-up faults that come in bursts do not reach KGSL's
+ * "3 faults in 2 s" context-invalidation limit.
+ */
+extern std::atomic<int64_t> tu_safe_until_ns;
+static inline bool
+tu_safe_active(void)
+{
+   int64_t until = tu_safe_until_ns.load(std::memory_order_relaxed);
+   return until && os_time_get_nano() < until;
+}
 /* pass statistics: [split][sysmem] counts per feature mask (11 bits) */
 #define TU_FEAT_STATS 2048
 extern std::atomic<uint32_t> tu_feat_stats[2][2][TU_FEAT_STATS];

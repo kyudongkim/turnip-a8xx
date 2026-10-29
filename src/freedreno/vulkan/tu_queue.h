@@ -40,6 +40,7 @@ struct tu_queue
 
    /* TU_HANGLOG */
    std::atomic<uint32_t> hanglog_last_ts{0};
+   uint32_t safemode_faults = 0;
    std::atomic<bool> hanglog_has_submit{false};
 };
 VK_DEFINE_HANDLE_CASTS(tu_queue, vk.base, VkQueue, VK_OBJECT_TYPE_QUEUE)

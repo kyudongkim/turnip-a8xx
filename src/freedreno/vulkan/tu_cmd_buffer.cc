@@ -1669,7 +1669,7 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
                      tu_autotune::rp_ctx_t *rp_ctx,
                      tu_autotune::rp_key_opt rp_key)
 {
-   if (TU_DEBUG(SYSMEM)) {
+   if (TU_DEBUG(SYSMEM) && !tu_safe_active()) {
       cmd->state.rp.force_render_mode_reason = "TU_DEBUG(SYSMEM)";
       return true;
    }
@@ -1727,6 +1727,11 @@ use_sysmem_rendering(struct tu_cmd_buffer *cmd,
 
    if (TU_DEBUG(GMEM)) {
       cmd->state.rp.force_render_mode_reason = "TU_DEBUG(GMEM)";
+      return false;
+   }
+
+   if (tu_safe_active()) {
+      cmd->state.rp.force_render_mode_reason = "TU_SAFEMODE";
       return false;
    }
 
@@ -9580,6 +9585,8 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
       } else if (pad == 3) {
          tu_cs_emit_pkt7(cs, CP_WAIT_MEM_WRITES, 0);
       } else if (pad == 4) {
+         tu_cs_emit_pkt7(cs, CP_WAIT_FOR_ME, 0);
+      } else if (tu_safe_active()) {
          tu_cs_emit_pkt7(cs, CP_WAIT_FOR_ME, 0);
       }
    }

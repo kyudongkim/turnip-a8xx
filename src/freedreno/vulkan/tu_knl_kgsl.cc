@@ -1688,6 +1688,48 @@ kgsl_bind_finalize(struct tu_kgsl_queue_submit *submit)
    }
 }
 
+
+/* TU_SAFEMODE: see tu_util.h. Checked before every submission. */
+static void
+kgsl_safemode_before_submit(struct tu_queue *queue)
+{
+   static int ms = -1;
+   if (unlikely(ms < 0)) {
+      const char *v = os_get_option("TU_SAFEMODE");
+      if (!v || !*v || !strcmp(v, "0") || !strcmp(v, "false"))
+         ms = 0;
+      else if (!strcmp(v, "1") || !strcmp(v, "true"))
+         ms = 3000;
+      else
+         ms = MAX2(atoi(v), 0);
+   }
+   if (!ms)
+      return;
+
+   struct tu_device *dev = queue->device;
+   struct kgsl_context_property_fault f = {};
+   struct kgsl_context_property cp = {
+      .data = (uint64_t)(uintptr_t)&f,
+      .size = sizeof(f),
+      .type = KGSL_CONTEXT_PROP_FAULTS,
+      .contextid = queue->msm_queue_id,
+   };
+   if (get_kgsl_prop(dev->fd, KGSL_PROP_CONTEXT_PROPERTY, &cp, sizeof(cp)) == VK_SUCCESS &&
+       (uint32_t)f.faults > queue->safemode_faults) {
+      queue->safemode_faults = f.faults;
+      tu_safe_until_ns.store(os_time_get_nano() + (int64_t)ms * 1000000ll,
+                             std::memory_order_relaxed);
+      mesa_logw("TU_SAFEMODE: kernel GPU fault #%u on ctx %u -> safe mode for %d ms",
+                (unsigned)f.faults, queue->msm_queue_id, ms);
+   }
+
+   /* In safe mode, keep at most one submission in flight on this queue. */
+   if (tu_safe_active() && queue->fence >= 0) {
+      wait_timestamp_safe(dev, queue->msm_queue_id, queue->fence,
+                          os_time_get_absolute_timeout(200 * 1000000ull));
+   }
+}
+
 static VkResult
 kgsl_queue_submit(struct tu_queue *queue, void *_submit,
                   struct vk_sync_wait *waits, uint32_t wait_count,
@@ -1700,6 +1742,8 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
 #if HAVE_PERFETTO
    uint64_t start_ts = tu_perfetto_begin_submit();
 #endif
+
+   kgsl_safemode_before_submit(queue);
 
    if (submit->commands.size == 0 && submit->bind_cmds.size == 0) {
       /* This handles the case where we have a wait and no commands to submit.
