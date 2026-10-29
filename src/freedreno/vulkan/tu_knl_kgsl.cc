@@ -1796,10 +1796,19 @@ kgsl_safemode_before_submit(struct tu_queue *queue)
    if (get_kgsl_prop(dev->fd, KGSL_PROP_CONTEXT_PROPERTY, &cp, sizeof(cp)) == VK_SUCCESS &&
        (uint32_t)f.faults > queue->safemode_faults) {
       queue->safemode_faults = f.faults;
-      tu_safe_until_ns.store(os_time_get_nano() + (int64_t)ms * 1000000ll,
-                             std::memory_order_relaxed);
-      mesa_logw("TU_SAFEMODE: kernel GPU fault #%u on ctx %u -> safe mode for %d ms",
-                (unsigned)f.faults, queue->msm_queue_id, ms);
+      /* Escalate: a fault during safe mode or soon after it ended doubles
+       * the window (up to 60 s); a fault after a quiet period resets it.
+       */
+      static int64_t cur_ms = 0;
+      const int64_t now = os_time_get_nano();
+      const int64_t until = tu_safe_until_ns.load(std::memory_order_relaxed);
+      if (cur_ms && until && now < until + 5000ll * 1000000ll)
+         cur_ms = MIN2(cur_ms * 2, 60000);
+      else
+         cur_ms = ms;
+      tu_safe_until_ns.store(now + cur_ms * 1000000ll, std::memory_order_relaxed);
+      mesa_logw("TU_SAFEMODE: kernel GPU fault #%u on ctx %u -> safe mode for %lld ms",
+                (unsigned)f.faults, queue->msm_queue_id, (long long)cur_ms);
    }
 
    /* In safe mode, keep at most one submission in flight on this queue. */
