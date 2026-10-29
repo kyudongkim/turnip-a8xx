@@ -125,6 +125,12 @@ tu_device_get_cache_uuid(struct tu_physical_device *device, void *uuid)
    _mesa_blake3_update(&ctx, &device->uche_trap_base, sizeof(device->uche_trap_base));
    _mesa_blake3_update(&ctx, &device->compiler_options,
                        sizeof(device->compiler_options));
+   /* FD_DEV_FEATURES can change compiler-visible props (e.g.
+    * has_fs_tex_prefetch); don't reuse binaries compiled without it.
+    */
+   const char *dev_features = os_get_option("FD_DEV_FEATURES");
+   if (dev_features)
+      _mesa_blake3_update(&ctx, dev_features, strlen(dev_features));
    _mesa_blake3_final(&ctx, blake3);
 
    memcpy(uuid, blake3, VK_UUID_SIZE);
