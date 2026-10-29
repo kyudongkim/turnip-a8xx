@@ -81,6 +81,7 @@ os_file_notifier_t tu_debug_notifier;
 bool tu_hanglog_enabled;
 bool tu_hanglog_lite;
 std::atomic<int64_t> tu_safe_until_ns{0};
+std::atomic<int> tu_safe_level{1};
 std::atomic<uint32_t> tu_gmem_for_hits{0};
 struct tu_hanglog_entry tu_hanglog_ring[TU_HANGLOG_RING];
 struct tu_hanglog_rpmode tu_hanglog_rpmodes[TU_HANGLOG_RPRING];

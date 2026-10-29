@@ -9586,7 +9586,11 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
          tu_cs_emit_pkt7(cs, CP_WAIT_MEM_WRITES, 0);
       } else if (pad == 4) {
          tu_cs_emit_pkt7(cs, CP_WAIT_FOR_ME, 0);
-      } else if (tu_safe_active()) {
+      } else if (int lvl = tu_safe_level_active()) {
+         if (lvl >= 2) {
+            tu_cs_emit_pkt7(cs, CP_WAIT_MEM_WRITES, 0);
+            tu_cs_emit_wfi(cs);
+         }
          tu_cs_emit_pkt7(cs, CP_WAIT_FOR_ME, 0);
       }
    }

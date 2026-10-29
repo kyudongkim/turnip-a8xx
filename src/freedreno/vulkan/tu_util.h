@@ -177,6 +177,13 @@ tu_safe_active(void)
    int64_t until = tu_safe_until_ns.load(std::memory_order_relaxed);
    return until && os_time_get_nano() < until;
 }
+/* 1: normal safe mode, 2: escalated (repeated faults) -> also WFI per draw */
+extern std::atomic<int> tu_safe_level;
+static inline int
+tu_safe_level_active(void)
+{
+   return tu_safe_active() ? tu_safe_level.load(std::memory_order_relaxed) : 0;
+}
 /* pass statistics: [split][sysmem] counts per feature mask (11 bits) */
 #define TU_FEAT_STATS 2048
 extern std::atomic<uint32_t> tu_feat_stats[2][2][TU_FEAT_STATS];
