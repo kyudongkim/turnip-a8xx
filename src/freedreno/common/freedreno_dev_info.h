@@ -508,6 +508,11 @@ struct fd_dev_info {
 
       /* On a750+ SUBPASS_FENCE also implicitly does CCU_RESOLVE_CLEAN */
       bool subpass_fence_cleans_resolve;
+
+      /* On a8xx sampling a cube map with a direction that has no defined
+       * face projection (NaN, the zero vector) may hang the GPU.
+       */
+      bool cube_coord_hang_quirk;
    } props;
 
 #define FD_QUIRK(info, name) (info)->quirks.name

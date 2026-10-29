@@ -2947,6 +2947,8 @@ tu_init_hw(struct tu_cmd_buffer *cmd, struct tu_cs *cs)
          .gfx_shared_const = true,
          .cs_bindless = CHIP == A6XX ? 0x1f : 0xff,
          .gfx_bindless = CHIP == A6XX ? 0x1f : 0xff,));
+   if (CHIP >= A8XX)
+      tu_emit_bindless_invalidate<CHIP>(cs, true, true);
 
    tu_cs_emit_wfi(cs);
 
@@ -5398,10 +5400,9 @@ tu6_emit_descriptor_sets(struct tu_cmd_buffer *cmd,
       }
    }
 
-   tu_cs_emit_regs(cs, SP_UPDATE_CNTL(CHIP,
-      .cs_bindless = bind_point == VK_PIPELINE_BIND_POINT_COMPUTE ? CHIP == A6XX ? 0x1f : 0xff : 0,
-      .gfx_bindless = bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS ? CHIP == A6XX ? 0x1f : 0xff : 0,
-   ));
+   tu_emit_bindless_invalidate<CHIP>(cs,
+      bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS,
+      bind_point == VK_PIPELINE_BIND_POINT_COMPUTE);
 
    if (bind_point == VK_PIPELINE_BIND_POINT_GRAPHICS) {
       assert(cs->cur == cs->end); /* validate draw state size */

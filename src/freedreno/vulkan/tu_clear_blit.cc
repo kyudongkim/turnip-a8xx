@@ -1216,6 +1216,8 @@ r3d_common(struct tu_cmd_buffer *cmd, struct tu_cs *cs, enum r3d_type type,
          .gfx_shared_const = true,
          .cs_bindless = CHIP == A6XX ? 0x1f : 0xff,
          .gfx_bindless = CHIP == A6XX ? 0x1f : 0xff,));
+   if (CHIP >= A8XX)
+      tu_emit_bindless_invalidate<CHIP>(cs, true, true);
 
    with_crb (cs, 2 * 5 + 2 * 12) {
       tu6_emit_xs_config<CHIP>(crb, { .vs = vs, .fs = fs });
