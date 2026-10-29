@@ -5056,6 +5056,8 @@ tu_cmd_buffer_begin(struct tu_cmd_buffer *cmd_buffer,
    cmd_buffer->hanglog_first_id = cmd_buffer->hanglog_last_id = 0;
    cmd_buffer->hanglog_last_draw = NULL;
    cmd_buffer->wfm_pending = 0;
+   cmd_buffer->diag_draws = cmd_buffer->diag_fsz = 0;
+   cmd_buffer->diag_fsst = cmd_buffer->diag_kill = 0;
 
    memset(&cmd_buffer->state, 0, sizeof(cmd_buffer->state));
    vk_dynamic_graphics_state_init(&cmd_buffer->vk.dynamic_graphics_state);
@@ -9523,6 +9525,20 @@ tu6_draw_common(struct tu_cmd_buffer *cmd,
    if (unlikely(tu_hanglog_enabled)) {
       cmd->hanglog_count = draw_count;
       tu_hanglog_mark<CHIP>(cmd, cs, draw_count == 0 ? 2 : 1);
+   }
+
+   if (unlikely(tu_hanglog_enabled)) {
+      cmd->diag_draws++;
+      const struct tu_shader *fs = cmd->state.shaders[MESA_SHADER_FRAGMENT];
+      if (fs && fs->variant) {
+         const struct ir3_shader_variant *v = fs->variant;
+         if (VALIDREG(ir3_find_output_regid(v, FRAG_RESULT_DEPTH)))
+            cmd->diag_fsz++;
+         if (v->writes_stencilref)
+            cmd->diag_fsst++;
+         if (v->has_kill)
+            cmd->diag_kill++;
+      }
    }
 
    /* TU_WFM_AFTER=<kinds>: CP_WAIT_FOR_ME before the first draw that follows

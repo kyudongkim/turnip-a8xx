@@ -22,6 +22,7 @@
 #include "msm_kgsl.h"
 
 #include "util/libsync.h"
+#include "util/simple_mtx.h"
 #include "util/os_file.h"
 #include "util/timespec.h"
 #include "util/u_debug.h"
@@ -63,7 +64,8 @@ kgsl_ignore_faults(void)
 {
    static int v = -1;
    if (unlikely(v < 0))
-      v = debug_get_bool_option("TU_KGSL_IGNORE_FAULTS", false);
+      v = debug_get_bool_option("TU_KGSL_IGNORE_FAULTS", false) ||
+          debug_get_bool_option("TU_CTX_RECOVER", false);
    return v;
 }
 
@@ -1033,10 +1035,14 @@ kgsl_syncobj_dup(struct tu_device *device, const struct kgsl_syncobj *s, struct 
    return VK_SUCCESS;
 }
 
+static bool kgsl_ts_xlate(uint32_t ctx, uint32_t *ts);
+
 static int
 timestamp_to_fd(struct tu_queue *queue, uint32_t timestamp)
 {
    int fd;
+   if (kgsl_ts_xlate(queue->msm_queue_id, &timestamp))
+      timestamp = 0; /* already signaled */
    struct kgsl_timestamp_event event = {
       .type = KGSL_TIMESTAMP_EVENT_FENCE,
       .timestamp = timestamp,
@@ -1074,6 +1080,111 @@ max_ts(uint32_t a, uint32_t b)
    return timestamp_cmp(a, b) ? a : b;
 }
 
+/* TU_CTX_RECOVER=1: when KGSL invalidates a context (e.g. "gpu fault
+ * threshold exceeded"), create a new context and keep going instead of
+ * reporting VK_ERROR_DEVICE_LOST. Timestamps handed out to the rest of the
+ * driver are virtual: kernel timestamp + per-context offset. Anything at or
+ * below a context's offset belongs to a previous (dead) context and is
+ * treated as signaled.
+ */
+static bool
+kgsl_ctx_recover_enabled(void)
+{
+   static int v = -1;
+   if (unlikely(v < 0))
+      v = debug_get_bool_option("TU_CTX_RECOVER", false);
+   return v;
+}
+
+struct kgsl_ctx_xlate {
+   uint32_t ctx;
+   uint32_t offset;
+   bool dead;
+};
+static struct kgsl_ctx_xlate kgsl_xlate[256];
+static unsigned kgsl_nxlate;
+static simple_mtx_t kgsl_xlate_mtx = SIMPLE_MTX_INITIALIZER;
+
+static struct kgsl_ctx_xlate *
+kgsl_xlate_find_locked(uint32_t ctx)
+{
+   for (unsigned i = 0; i < kgsl_nxlate; i++)
+      if (kgsl_xlate[i].ctx == ctx)
+         return &kgsl_xlate[i];
+   return NULL;
+}
+
+/* Returns true if the (virtual) timestamp is already signaled; otherwise
+ * converts it to the context's kernel timestamp.
+ */
+static bool
+kgsl_ts_xlate(uint32_t ctx, uint32_t *ts)
+{
+   if (!kgsl_ctx_recover_enabled())
+      return false;
+   bool signaled = false;
+   simple_mtx_lock(&kgsl_xlate_mtx);
+   struct kgsl_ctx_xlate *x = kgsl_xlate_find_locked(ctx);
+   if (x) {
+      if (x->dead || !timestamp_cmp(*ts, x->offset + 1))
+         signaled = true;
+      else
+         *ts -= x->offset;
+   }
+   simple_mtx_unlock(&kgsl_xlate_mtx);
+   return signaled;
+}
+
+static uint32_t
+kgsl_ctx_offset(uint32_t ctx)
+{
+   if (!kgsl_ctx_recover_enabled())
+      return 0;
+   simple_mtx_lock(&kgsl_xlate_mtx);
+   struct kgsl_ctx_xlate *x = kgsl_xlate_find_locked(ctx);
+   uint32_t off = x ? x->offset : 0;
+   simple_mtx_unlock(&kgsl_xlate_mtx);
+   return off;
+}
+
+static int
+kgsl_queue_recover(struct tu_queue *queue)
+{
+   static simple_mtx_t recover_mtx = SIMPLE_MTX_INITIALIZER;
+   simple_mtx_lock(&recover_mtx);
+   const uint32_t old_ctx = queue->msm_queue_id;
+   const uint32_t vbase = queue->fence >= 0 ? (uint32_t) queue->fence : 0;
+   int r = kgsl_submitqueue_new(queue->device, queue);
+   if (r) {
+      queue->msm_queue_id = old_ctx;
+      mesa_logw("TU_CTX_RECOVER: creating a new context failed (%s)", strerror(errno));
+      simple_mtx_unlock(&recover_mtx);
+      return r;
+   }
+   simple_mtx_lock(&kgsl_xlate_mtx);
+   struct kgsl_ctx_xlate *o = kgsl_xlate_find_locked(old_ctx);
+   if (!o && kgsl_nxlate < ARRAY_SIZE(kgsl_xlate)) {
+      o = &kgsl_xlate[kgsl_nxlate++];
+      o->ctx = old_ctx;
+      o->offset = 0;
+   }
+   if (o)
+      o->dead = true;
+   if (kgsl_nxlate < ARRAY_SIZE(kgsl_xlate)) {
+      struct kgsl_ctx_xlate *n = &kgsl_xlate[kgsl_nxlate++];
+      n->ctx = queue->msm_queue_id;
+      n->offset = vbase;
+      n->dead = false;
+   }
+   simple_mtx_unlock(&kgsl_xlate_mtx);
+   queue->safemode_faults = 0;
+   static unsigned count = 0;
+   mesa_logw("TU_CTX_RECOVER: ctx %u invalidated -> new ctx %u (timestamp base %u, recovery #%u)",
+             old_ctx, queue->msm_queue_id, vbase, ++count);
+   simple_mtx_unlock(&recover_mtx);
+   return 0;
+}
+
 static uint32_t
 min_ts(uint32_t a, uint32_t b)
 {
@@ -1109,6 +1220,12 @@ kgsl_timestamp_error(
    /* - EPROTO - Device faulted since the last check;
     * - ENOENT - Context has been detached.
     */
+   if (kgsl_ctx_recover_enabled() &&
+       (error == EDEADLK || error == EPROTO || error == ENOENT || error == EINVAL)) {
+      mesa_logw("TU_CTX_RECOVER: %s on ctx %u ts %u failed (%s) -> treated as signaled",
+                operation, context_id, timestamp, strerror(error));
+      return VK_SUCCESS;
+   }
    if (error == EDEADLK || error == EPROTO || error == ENOENT)
       return vk_device_set_lost(&device->vk, "KGSL timestamp %s failed: context %u, timestamp %u, errno %d (%s)",
                                 operation, context_id, timestamp, error, strerror(error));
@@ -1118,7 +1235,7 @@ kgsl_timestamp_error(
 }
 
 static VkResult
-kgsl_poll_timestamp(struct tu_device *device, unsigned int context_id, unsigned int timestamp)
+kgsl_poll_timestamp_raw(struct tu_device *device, unsigned int context_id, unsigned int timestamp)
 {
    struct kgsl_cmdstream_readtimestamp_ctxtid read = {
       .context_id = context_id,
@@ -1132,12 +1249,22 @@ kgsl_poll_timestamp(struct tu_device *device, unsigned int context_id, unsigned 
    return timestamp_cmp(read.timestamp, timestamp) ? VK_SUCCESS : VK_TIMEOUT;
 }
 
+static VkResult
+kgsl_poll_timestamp(struct tu_device *device, unsigned int context_id, unsigned int timestamp)
+{
+   if (kgsl_ts_xlate(context_id, &timestamp))
+      return VK_SUCCESS;
+   return kgsl_poll_timestamp_raw(device, context_id, timestamp);
+}
+
 /* safe_ioctl is not enough as restarted waits would not adjust the timeout
  * which could lead to waiting substantially longer than requested
  */
 static VkResult
 wait_timestamp_safe(struct tu_device *device, unsigned int context_id, unsigned int timestamp, uint64_t abs_timeout_ns)
 {
+   if (kgsl_ts_xlate(context_id, &timestamp))
+      return VK_SUCCESS;
    struct kgsl_device_waittimestamp_ctxtid wait = {
       .context_id = context_id,
       .timestamp = timestamp,
@@ -1146,7 +1273,7 @@ wait_timestamp_safe(struct tu_device *device, unsigned int context_id, unsigned 
    while (true) {
       int timeout_ms = get_relative_ms(abs_timeout_ns);
       if (timeout_ms == 0)
-         return kgsl_poll_timestamp(device, context_id, timestamp);
+         return kgsl_poll_timestamp_raw(device, context_id, timestamp);
 
       wait.timeout = timeout_ms;
       int ret = ioctl(device->fd, IOCTL_KGSL_DEVICE_WAITTIMESTAMP_CTXTID, &wait);
@@ -1964,6 +2091,8 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
    case KGSL_SYNCOBJ_STATE_TS:
       ts.context_id = wait_sync.queue->msm_queue_id;
       ts.timestamp = wait_sync.timestamp;
+      if (kgsl_ts_xlate(ts.context_id, &ts.timestamp))
+         break; /* belongs to a dead context: nothing to wait for */
 
       has_sync = true;
       sync.type = KGSL_CMD_SYNCPOINT_TYPE_TIMESTAMP;
@@ -2024,6 +2153,16 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
                    (error == EPROTO && kgsl_ignore_faults()) ? " -> ignored" : "");
       if (ret && error == EPROTO && kgsl_ignore_faults())
          ret = 0;
+      if (ret && kgsl_ctx_recover_enabled() &&
+          (error == EDEADLK || error == ENOENT || error == EINVAL) &&
+          kgsl_queue_recover(queue) == 0) {
+         req.context_id = queue->msm_queue_id;
+         req.numsyncs = 0; /* previous work is gone, do not wait on it */
+         ret = safe_ioctl(queue->device->physical_device->local_fd,
+                          IOCTL_KGSL_GPU_COMMAND, &req);
+         if (ret && errno == EPROTO)
+            ret = 0;
+      }
       if (ret) {
          kgsl_syncobj_destroy(&wait_sync);
          result = vk_device_set_lost(&queue->device->vk, "submit failed: %s\n", strerror(error));
@@ -2118,6 +2257,7 @@ kgsl_queue_submit(struct tu_queue *queue, void *_submit,
 
    kgsl_syncobj_destroy(&wait_sync);
 
+   timestamp += kgsl_ctx_offset(queue->msm_queue_id);
    p_atomic_set(&queue->fence, timestamp);
 
    for (uint32_t i = 0; i < signal_count; i++) {
@@ -2327,6 +2467,8 @@ hanglog_print_submit(const char *tag, uint32_t ctx, uint32_t ts,
    mesa_logw("TU_HANGLOG:   [%s] submit ts %u: %u cmdbuf(s)%s, %.3f s ago",
              tag, ts, hs->ncmds, hs->ncmds > hs->n ? " (truncated)" : "",
              (os_time_get_nano() - hs->t_ns) / 1e9);
+   mesa_logw("TU_HANGLOG:   [%s] draws %u: FS writes depth %u, FS stencil export %u, FS discard %u",
+             tag, hs->draws, hs->fsz, hs->fsst, hs->kill);
    for (uint32_t c = 0; c < hs->n; c++) {
       bool has_marker = marker && marker >= hs->first[c] && marker <= hs->last[c];
       mesa_logw("TU_HANGLOG:     cmdbuf#%u ids %u..%u%s", hs->seq[c],

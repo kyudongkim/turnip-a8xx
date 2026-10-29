@@ -714,6 +714,7 @@ struct tu_cmd_buffer
    bool synchack_prev_uav;
    uint64_t synchack_prev_index_va;
    uint64_t wfm_pending; /* TU_WFM_AFTER: command kinds seen since last draw */
+   uint32_t diag_draws, diag_fsz, diag_fsst, diag_kill; /* hanglog: FS depth/stencil export */
    uint32_t hanglog_seq;
    uint32_t hanglog_first_id, hanglog_last_id;
    struct tu_hanglog_entry *hanglog_last_draw;

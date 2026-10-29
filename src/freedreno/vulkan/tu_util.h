@@ -203,6 +203,7 @@ struct tu_hanglog_submit {
    uint32_t seq[TU_HANGLOG_SUBMIT_MAX];
    uint32_t first[TU_HANGLOG_SUBMIT_MAX];
    uint32_t last[TU_HANGLOG_SUBMIT_MAX];
+   uint32_t draws, fsz, fsst, kill;
 };
 extern struct tu_hanglog_submit tu_hanglog_submits[TU_HANGLOG_SUBMIT_RING];
 extern thread_local struct tu_hanglog_submit tu_hanglog_pending;

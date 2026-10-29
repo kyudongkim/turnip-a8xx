@@ -480,6 +480,14 @@ queue_submit(struct vk_queue *_queue, struct vk_queue_submit *vk_submit)
    if (unlikely(tu_hanglog_enabled)) {
       tu_hanglog_pending.n = 0;
       tu_hanglog_pending.ncmds = cmdbuf_count;
+      tu_hanglog_pending.draws = tu_hanglog_pending.fsz = 0;
+      tu_hanglog_pending.fsst = tu_hanglog_pending.kill = 0;
+      for (uint32_t i = 0; i < cmdbuf_count; i++) {
+         tu_hanglog_pending.draws += cmd_buffers[i]->diag_draws;
+         tu_hanglog_pending.fsz += cmd_buffers[i]->diag_fsz;
+         tu_hanglog_pending.fsst += cmd_buffers[i]->diag_fsst;
+         tu_hanglog_pending.kill += cmd_buffers[i]->diag_kill;
+      }
       for (uint32_t i = 0; i < cmdbuf_count &&
                            i < TU_HANGLOG_SUBMIT_MAX; i++) {
          tu_hanglog_pending.seq[i] = cmd_buffers[i]->hanglog_seq;
