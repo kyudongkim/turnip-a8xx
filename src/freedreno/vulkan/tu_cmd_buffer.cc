@@ -2602,6 +2602,45 @@ tu6_init_static_regs(struct tu_device *dev, struct tu_cs *cs)
             break;
       }
 
+      /* TU_MAGIC=<reg>=<val>[,<reg>=<val>...] (hex): override a raw magic
+       * register value, e.g. TU_MAGIC=0x9b00=0x3f20 for A8XX PC_MODE_CNTL.
+       */
+      {
+         static int n_ovr = -1;
+         static uint32_t ovr_reg[8], ovr_val[8];
+         if (unlikely(n_ovr < 0)) {
+            n_ovr = 0;
+            const char *v = os_get_option("TU_MAGIC");
+            if (v) {
+               char buf[256];
+               snprintf(buf, sizeof(buf), "%s", v);
+               for (char *save = NULL, *t = strtok_r(buf, ",", &save);
+                    t && n_ovr < 8; t = strtok_r(NULL, ",", &save)) {
+                  char *eq = strchr(t, '=');
+                  if (!eq)
+                     continue;
+                  *eq = 0;
+                  ovr_reg[n_ovr] = strtoul(t, NULL, 16);
+                  ovr_val[n_ovr] = strtoul(eq + 1, NULL, 16);
+                  mesa_logw("TU_MAGIC: reg 0x%x = 0x%08x", ovr_reg[n_ovr],
+                            ovr_val[n_ovr]);
+                  n_ovr++;
+               }
+            }
+         }
+         for (int o = 0; o < n_ovr; o++) {
+            if (ovr_reg[o] == magic_reg.reg) {
+               static bool logged[64];
+               if (!logged[i]) {
+                  logged[i] = true;
+                  mesa_logw("TU_MAGIC: applied reg 0x%x: 0x%08x -> 0x%08x",
+                            magic_reg.reg, value, ovr_val[o]);
+               }
+               value = ovr_val[o];
+            }
+         }
+      }
+
       tu_cs_emit_write_reg(cs, magic_reg.reg, value);
    }
 
