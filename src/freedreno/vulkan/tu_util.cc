@@ -230,9 +230,110 @@ static const struct debug_control tu_synchack_options[] = {
    { NULL, 0 }
 };
 
+/* TU_SAFEMODE as one switch for the whole A8xx GPC-fault mitigation set.
+ *
+ *   TU_SAFEMODE=1                 everything on, 3000 ms safe window
+ *   TU_SAFEMODE=5000              same, 5000 ms window
+ *   TU_SAFEMODE=1,norecover,preempt=fine,merged=depth,ms=4000,...
+ *
+ * Tokens (comma separated, any order):
+ *   <number> | ms=<n>             safe window base in ms (1/true = 3000)
+ *   recover | norecover           TU_CTX_RECOVER          (default on)
+ *   merged[=<spec>] | nomerged    TU_GMEM_MERGED          (default 1)
+ *   preempt=ring|fine | nopreempt TU_KGSL_PREEMPT         (default ring)
+ *   hanglog[=lite|1] | nohanglog  TU_HANGLOG              (default lite)
+ *   nowait | nonowait             TU_QUERY_NOWAIT         (default on)
+ *
+ * The preset only fills variables that are not already set, so an
+ * explicitly set TU_CTX_RECOVER=0 (etc.) still wins. TU_SAFEMODE itself is
+ * rewritten to the bare window value for the code that reads it later.
+ */
+static void
+tu_safemode_preset(void)
+{
+   const char *v = getenv("TU_SAFEMODE");
+   if (!v || !*v || !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "off"))
+      return;
+
+   int ms = 3000;
+   const char *recover = "1", *merged = "1", *preempt = "ring";
+   const char *hanglog = "lite", *nowait = "1";
+   static char merged_buf[128], hanglog_buf[16], preempt_buf[16];
+
+   char buf[512];
+   snprintf(buf, sizeof(buf), "%s", v);
+   char *save = NULL;
+   for (char *t = strtok_r(buf, ",", &save); t; t = strtok_r(NULL, ",", &save)) {
+      while (*t == ' ')
+         t++;
+      if (!strcmp(t, "1") || !strcmp(t, "true") || !strcmp(t, "on"))
+         ms = 3000;
+      else if (t[0] >= '0' && t[0] <= '9')
+         ms = MAX2(atoi(t), 1);
+      else if (!strncmp(t, "ms=", 3))
+         ms = MAX2(atoi(t + 3), 1);
+      else if (!strcmp(t, "recover"))
+         recover = "1";
+      else if (!strcmp(t, "norecover"))
+         recover = NULL;
+      else if (!strcmp(t, "merged"))
+         merged = "1";
+      else if (!strncmp(t, "merged=", 7)) {
+         /* specs use '+' between features, so no commas to worry about */
+         snprintf(merged_buf, sizeof(merged_buf), "%s", t + 7);
+         merged = merged_buf;
+      } else if (!strcmp(t, "nomerged"))
+         merged = NULL;
+      else if (!strncmp(t, "preempt=", 8)) {
+         snprintf(preempt_buf, sizeof(preempt_buf), "%s", t + 8);
+         preempt = !strcmp(preempt_buf, "none") ? NULL : preempt_buf;
+      } else if (!strcmp(t, "nopreempt"))
+         preempt = NULL;
+      else if (!strcmp(t, "hanglog"))
+         hanglog = "lite";
+      else if (!strncmp(t, "hanglog=", 8)) {
+         snprintf(hanglog_buf, sizeof(hanglog_buf), "%s", t + 8);
+         hanglog = hanglog_buf;
+      } else if (!strcmp(t, "nohanglog"))
+         hanglog = NULL;
+      else if (!strcmp(t, "nowait"))
+         nowait = "1";
+      else if (!strcmp(t, "nonowait"))
+         nowait = NULL;
+      else
+         mesa_logw("TU_SAFEMODE: unknown token '%s' ignored", t);
+   }
+
+   /* Only fill what the user did not set explicitly. */
+   if (recover)
+      setenv("TU_CTX_RECOVER", recover, 0);
+   if (merged)
+      setenv("TU_GMEM_MERGED", merged, 0);
+   if (preempt)
+      setenv("TU_KGSL_PREEMPT", preempt, 0);
+   if (hanglog)
+      setenv("TU_HANGLOG", hanglog, 0);
+   if (nowait)
+      setenv("TU_QUERY_NOWAIT", nowait, 0);
+
+   char msbuf[16];
+   snprintf(msbuf, sizeof(msbuf), "%d", ms);
+   setenv("TU_SAFEMODE", msbuf, 1);
+
+#define TU_SM_ENV(n) (getenv(n) ? getenv(n) : "unset")
+   mesa_logw("TU_SAFEMODE: window %d ms | TU_CTX_RECOVER=%s TU_GMEM_MERGED=%s "
+             "TU_KGSL_PREEMPT=%s TU_HANGLOG=%s TU_QUERY_NOWAIT=%s",
+             ms, TU_SM_ENV("TU_CTX_RECOVER"), TU_SM_ENV("TU_GMEM_MERGED"),
+             TU_SM_ENV("TU_KGSL_PREEMPT"), TU_SM_ENV("TU_HANGLOG"),
+             TU_SM_ENV("TU_QUERY_NOWAIT"));
+#undef TU_SM_ENV
+}
+
 static void
 tu_env_init_once(void)
 {
+   tu_safemode_preset();
+
    tu_env.start_debug = tu_env.debug = parse_debug_string(os_get_option("TU_DEBUG"), tu_debug_options);
    tu_env.synchack = (uint32_t) parse_debug_string(os_get_option("TU_SYNCHACK"), tu_synchack_options);
    {

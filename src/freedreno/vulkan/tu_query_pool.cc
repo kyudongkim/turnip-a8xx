@@ -988,10 +988,8 @@ tu_CmdCopyQueryPoolResults(VkCommandBuffer commandBuffer,
    {
       static int nowait = -1;
       if (unlikely(nowait < 0))
-         nowait = debug_get_bool_option("TU_QUERY_NOWAIT", false) ||
-                  (os_get_option("TU_SAFEMODE") &&
-                   strcmp(os_get_option("TU_SAFEMODE"), "0") &&
-                   strcmp(os_get_option("TU_SAFEMODE"), "false"));
+         /* TU_SAFEMODE presets TU_QUERY_NOWAIT=1 (see tu_util.cc). */
+         nowait = debug_get_bool_option("TU_QUERY_NOWAIT", false);
       if (nowait)
          flags &= ~VK_QUERY_RESULT_WAIT_BIT;
    }
