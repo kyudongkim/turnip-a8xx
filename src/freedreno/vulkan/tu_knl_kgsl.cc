@@ -215,6 +215,12 @@ kgsl_submitqueue_close(struct tu_device *dev, struct tu_queue *queue)
 
 static void kgsl_bo_finish(struct tu_device *dev, struct tu_bo *bo);
 
+/* Memory / safe-mode statistics for the TU_HANGLOG heartbeat. */
+static std::atomic<int64_t> tu_stat_bo_bytes{0};
+static std::atomic<int64_t> tu_stat_bo_count{0};
+static std::atomic<uint32_t> tu_stat_submits{0};
+static std::atomic<uint32_t> tu_stat_submits_safe{0};
+
 static VkResult
 bo_init_new_dmaheap(struct tu_device *dev, struct tu_bo **out_bo, uint64_t size,
                 uint64_t align, enum tu_bo_alloc_flags flags)
@@ -619,6 +625,9 @@ kgsl_bo_init(struct tu_device *dev,
 
    *out_bo = bo;
 
+   bo->stat_counted = true;
+   tu_stat_bo_bytes.fetch_add(bo->size, std::memory_order_relaxed);
+   tu_stat_bo_count.fetch_add(1, std::memory_order_relaxed);
    if (unlikely(tu_hanglog_enabled))
       tu_hanglog_bo_event(1, bo->iova, bo->size, name);
 
@@ -749,6 +758,10 @@ kgsl_bo_finish(struct tu_device *dev, struct tu_bo *bo)
 
    tu_debug_bos_del(dev, bo);
    tu_dump_bo_del(dev, bo);
+   if (bo->stat_counted) {
+      tu_stat_bo_bytes.fetch_sub(bo->size, std::memory_order_relaxed);
+      tu_stat_bo_count.fetch_sub(1, std::memory_order_relaxed);
+   }
    if (unlikely(tu_hanglog_enabled))
       tu_hanglog_bo_event(2, bo->iova, bo->size, NULL);
 
@@ -1946,6 +1959,10 @@ kgsl_safemode_before_submit(struct tu_queue *queue)
    if (!ms)
       return;
 
+   tu_stat_submits.fetch_add(1, std::memory_order_relaxed);
+   if (tu_safe_active())
+      tu_stat_submits_safe.fetch_add(1, std::memory_order_relaxed);
+
    struct tu_device *dev = queue->device;
    struct kgsl_context_property_fault f = {};
    struct kgsl_context_property cp = {
@@ -2718,6 +2735,36 @@ hanglog_thread(void *data)
       }
       if (now - last_beat > 10ll * 1000000000ll) {
          last_beat = now;
+         {
+            /* Memory: driver GPU allocations, this process, the system. */
+            long rss_kb = -1, swap_kb = -1, avail_kb = -1, swapfree_kb = -1;
+            char line[256];
+            FILE *f = fopen("/proc/self/status", "r");
+            if (f) {
+               while (fgets(line, sizeof(line), f)) {
+                  sscanf(line, "VmRSS: %ld", &rss_kb);
+                  sscanf(line, "VmSwap: %ld", &swap_kb);
+               }
+               fclose(f);
+            }
+            f = fopen("/proc/meminfo", "r");
+            if (f) {
+               while (fgets(line, sizeof(line), f)) {
+                  sscanf(line, "MemAvailable: %ld", &avail_kb);
+                  sscanf(line, "SwapFree: %ld", &swapfree_kb);
+               }
+               fclose(f);
+            }
+            uint32_t subs = tu_stat_submits.exchange(0, std::memory_order_relaxed);
+            uint32_t safe = tu_stat_submits_safe.exchange(0, std::memory_order_relaxed);
+            mesa_logw("TU_HANGLOG: t=%lld mem gpu %lld MB (%lld bos) | rss %ld MB swap %ld MB | "
+                      "system avail %ld MB swapfree %ld MB | safe mode %u%% of %u submits",
+                      hanglog_wall_ms(),
+                      (long long) (tu_stat_bo_bytes.load(std::memory_order_relaxed) >> 20),
+                      (long long) tu_stat_bo_count.load(std::memory_order_relaxed),
+                      rss_kb / 1024, swap_kb / 1024, avail_kb / 1024, swapfree_kb / 1024,
+                      subs ? safe * 100 / subs : 0, subs);
+         }
          for (unsigned i = 0; i < TU_MAX_QUEUE_FAMILIES; i++)
             for (int q = 0; q < MIN2(dev->queue_count[i], 8); q++) {
                struct tu_queue *queue = &dev->queues[i][q];

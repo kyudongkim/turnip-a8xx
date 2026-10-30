@@ -60,6 +60,9 @@ struct tu_bo {
 
    /* Virtual BO the GPU accesses this BO through, or 0 if none. */
    uint32_t alias_handle;
+
+   /* Counted in the heartbeat's driver GPU memory total. */
+   bool stat_counted;
 #endif
 
    bool implicit_sync : 1;
