@@ -2158,6 +2158,11 @@ tu_GetPhysicalDeviceQueueFamilyProperties2(
    }
 }
 
+/* Set when TU_HEAP_MB shrinks the reported heap: the heap size is then
+ * only advisory and allocations past it are still allowed.
+ */
+static bool tu_heap_soft_cap;
+
 uint64_t
 tu_get_system_heap_size(struct tu_physical_device *physical_device)
 {
@@ -2168,6 +2173,18 @@ tu_get_system_heap_size(struct tu_physical_device *physical_device)
 
    if (physical_device->va_size)
       available_ram = MIN2(available_ram, physical_device->va_size);
+
+   /* TU_HEAP_MB=<n>: report a smaller memory heap (and so a smaller
+    * VK_EXT_memory_budget) so apps and translation layers that size their
+    * caches from it allocate less. Allocations beyond it are not refused.
+    */
+   const char *cap = os_get_option("TU_HEAP_MB");
+   if (cap && atoi(cap) > 0) {
+      available_ram = MIN2(available_ram, (uint64_t) atoi(cap) << 20);
+      tu_heap_soft_cap = true;
+      mesa_logw("TU_HEAP_MB: reporting a %" PRIu64 " MB memory heap",
+                available_ram >> 20);
+   }
 
    return available_ram;
 }
@@ -3583,7 +3600,7 @@ tu_add_to_heap(struct tu_device *dev, struct tu_bo *bo)
 {
    struct tu_memory_heap *mem_heap = &dev->physical_device->heap;
    uint64_t mem_heap_used = p_atomic_add_return(&mem_heap->used, bo->size);
-   if (mem_heap_used > mem_heap->size) {
+   if (mem_heap_used > mem_heap->size && !tu_heap_soft_cap) {
       p_atomic_add(&mem_heap->used, -bo->size);
       tu_bo_finish(dev, bo);
       return vk_errorf(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY,
@@ -3747,7 +3764,7 @@ tu_AllocateMemory(VkDevice _device,
 
    struct tu_memory_heap *mem_heap = &device->physical_device->heap;
    uint64_t mem_heap_used = p_atomic_read(&mem_heap->used);
-   if (mem_heap_used > mem_heap->size)
+   if (mem_heap_used > mem_heap->size && !tu_heap_soft_cap)
       return vk_error(device, VK_ERROR_OUT_OF_DEVICE_MEMORY);
 
    mem = static_cast<struct tu_device_memory *>(vk_device_memory_create(
