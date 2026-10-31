@@ -1,0 +1,87 @@
+name: publish-history
+
+# One-time (re-runnable) job, started by hand from the Actions tab:
+#  1. creates the tags r7..r54 listed in a8xx/tags.txt (skips existing ones)
+#  2. rebuilds the chosen ones from source and publishes them as releases
+# Old commits predate a8xx/, so the build script and notes come from main.
+on:
+  workflow_dispatch:
+    inputs:
+      releases:
+        description: 'Tags to build and release ("all" or space-separated, e.g. "r50 r51 r52 r53 r54")'
+        required: true
+        default: 'r50 r51 r52 r53 r54'
+
+permissions:
+  contents: write
+
+jobs:
+  tags:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create tags
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@users.noreply.github.com
+          grep -v '^#' a8xx/tags.txt | while read -r tag sha; do
+            if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+              echo "$tag exists"
+            else
+              git tag "$tag" "$sha"
+              echo "$tag -> $sha"
+            fi
+          done
+          git push origin --tags
+      - name: Release list
+        id: list
+        run: |
+          want="${{ inputs.releases }}"
+          if [[ "$want" == all ]]; then want=$(grep -v '^#' a8xx/tags.txt | awk '{print $1}'); fi
+          echo "matrix=$(printf '%s\n' $want | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: tags
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        tag: ${{ fromJson(needs.tags.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check out the tagged source, keep a8xx/ tooling from main
+        run: |
+          cp -r a8xx /tmp/a8xx
+          git checkout -q "${{ matrix.tag }}"
+          rm -rf a8xx && cp -r /tmp/a8xx a8xx
+      - name: Build
+        id: build
+        run: |
+          ZIP=$(a8xx/build.sh --deps "${{ matrix.tag }}" | tail -1)
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ matrix.tag }}"
+          awk -v t="$TAG" '
+            $0 ~ "^"t"([: ]|$)" {p=1; print; next}
+            p && /^r[0-9]+([: ]|$)/ {exit}
+            p {print}' a8xx/BUILD-NOTES.txt > notes.md
+          [[ -s notes.md ]] || echo "Build of ${TAG}." > notes.md
+          printf '\n\nRebuilt from source by GitHub Actions.\n' >> notes.md
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${{ steps.build.outputs.zip }}" --clobber
+          else
+            NEWEST=$(grep -v '^#' a8xx/tags.txt | awk '{print $1}' | sort -V | tail -1)
+            LATEST=false; [[ "$TAG" == "$NEWEST" ]] && LATEST=true
+            gh release create "$TAG" "${{ steps.build.outputs.zip }}" \
+              --title "$TAG" --notes-file notes.md --verify-tag --latest=$LATEST
+          fi

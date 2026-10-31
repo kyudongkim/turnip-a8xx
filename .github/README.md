@@ -64,8 +64,10 @@ GitHub Actions (`.github/workflows/build.yml`) builds every push; pushing a tag
 
 - Base: Mesa `main` snapshot of 2026-10-24 (`27.0.0-devel`), single commit "base".
 - Every later commit is one step of the investigation; the commit messages explain why.
-- Tags `r7`…`r54` point at the exact commit each released zip was built from.
-  r2–r6 were built before the history was committed and are not tagged.
+- [`a8xx/tags.txt`](../a8xx/tags.txt) maps `r7`…`r54` to the exact commit each
+  historical zip was built from (r2–r6 predate the history). The
+  **publish-history** workflow (Actions tab → Run workflow) creates those tags
+  and rebuilds the chosen ones as releases (`all` for every one).
 - Per-build notes: [`a8xx/BUILD-NOTES.txt`](../a8xx/BUILD-NOTES.txt).
 
 ## License
