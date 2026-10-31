@@ -67,7 +67,11 @@ GitHub Actions (`.github/workflows/build.yml`) builds every push; pushing a tag
 - [`a8xx/tags.txt`](../a8xx/tags.txt) maps `r7`…`r54` to the exact commit each
   historical zip was built from (r2–r6 predate the history). The
   **publish-history** workflow (Actions tab → Run workflow) creates those tags
-  and rebuilds the chosen ones as releases (`all` for every one).
+  and rebuilds the chosen ones as releases (`all` for every one). Creating
+  those tags needs a personal access token in the repository secret
+  `TAG_TOKEN` (fine-grained, this repository only, permissions
+  *Contents: Read and write* and *Workflows: Read and write*), because the old
+  commits still carry upstream Mesa's workflow files.
 - Per-build notes: [`a8xx/BUILD-NOTES.txt`](../a8xx/BUILD-NOTES.txt).
 
 ## License
