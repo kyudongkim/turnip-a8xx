@@ -1,0 +1,18 @@
+# Meson cross file: x86_64 Ubuntu 24.04 host -> aarch64 Linux (glibc).
+# Needs gcc/g++-aarch64-linux-gnu and the :arm64 -dev packages listed in
+# a8xx/build.sh (Debian/Ubuntu multiarch).
+[binaries]
+c = 'aarch64-linux-gnu-gcc'
+cpp = 'aarch64-linux-gnu-g++'
+ar = 'aarch64-linux-gnu-ar'
+strip = 'aarch64-linux-gnu-strip'
+pkg-config = 'pkg-config'
+
+[properties]
+pkg_config_libdir = ['/usr/lib/aarch64-linux-gnu/pkgconfig', '/usr/share/pkgconfig']
+
+[host_machine]
+system = 'linux'
+cpu_family = 'aarch64'
+cpu = 'armv8.2-a'
+endian = 'little'

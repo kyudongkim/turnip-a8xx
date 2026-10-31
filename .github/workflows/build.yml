@@ -1,0 +1,60 @@
+name: build
+
+# Builds the aarch64 Linux (glibc) Turnip driver.
+#  - every push to main / pull request: build and keep the zip as a workflow artifact
+#  - a pushed tag r<N> (e.g. r55): build and publish the zip as a GitHub release
+#  - manual run from the Actions tab: build with an optional name
+on:
+  push:
+    branches: [main]
+    tags: ['r*']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      name:
+        description: 'Name used in the zip (default: git describe)'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build
+        id: build
+        run: |
+          NAME="${{ inputs.name }}"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then NAME="${GITHUB_REF_NAME}"; fi
+          ZIP=$(a8xx/build.sh --deps ${NAME} | tail -1)
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+          echo "pkg=$(basename "$ZIP" .zip)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build.outputs.pkg }}
+          path: ${{ steps.build.outputs.zip }}
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/r')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          # Release notes: the matching "rN" section of a8xx/BUILD-NOTES.txt.
+          awk -v t="$TAG" '
+            $0 ~ "^"t"([: ]|$)" {p=1; print; next}
+            p && /^r[0-9]+([: ]|$)/ {exit}
+            p {print}' a8xx/BUILD-NOTES.txt > notes.md
+          [[ -s notes.md ]] || echo "Build of ${TAG}." > notes.md
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${{ steps.build.outputs.zip }}" --clobber
+          else
+            gh release create "$TAG" "${{ steps.build.outputs.zip }}" \
+              --title "$TAG" --notes-file notes.md
+          fi

@@ -1,0 +1,293 @@
+Turnip (Mesa 27.0.0-devel, main snapshot 2026-10-24) + TU_SYNCHACK diagnostic patch
+Built: aarch64 Linux (glibc), KMD backends: kgsl, msm. Platforms: x11, wayland.
+
+TU_SYNCHACK forces a full wait (CP_WAIT_MEM_WRITES + WFI + CP_WAIT_FOR_ME)
+only at the chosen kind of command, instead of everywhere like TU_DEBUG=syncdraw.
+Comma-separated, any combination:
+
+  draw   - before every direct draw
+  idraw  - before every indirect draw (DrawIndirect / Indexed / *Count / ByteCount)
+  disp   - before every direct compute dispatch
+  idisp  - before every indirect compute dispatch
+  other  - every other flush point (barriers, copies, blits, clears, events, queries)
+
+Example Steam launch options (do NOT also set TU_DEBUG=syncdraw/flushall):
+  TU_SYNCHACK=idraw,idisp %command%
+  TU_SYNCHACK=draw,idraw %command%
+  TU_SYNCHACK=disp,idisp %command%
+  TU_SYNCHACK=other %command%
+
+Without TU_SYNCHACK the driver behaves like stock Mesa main.
+Patch: turnip-synchack.patch
+
+r2: on kgsl, also expose VK_EXT_physical_device_drm using the first
+/dev/dri/renderD* (and card*) node visible in the guest, or the paths in
+TU_KGSL_DRM_RENDER_NODE / TU_KGSL_DRM_PRIMARY_NODE. Upstream disables this
+extension on kgsl, which made gamescope fail ("Failed to get DRM FD from
+renderer") and the Steam session never came up.
+r3: if only a render node exists, also report it as the primary node (gamescope requires drmHasPrimary).
+
+r4: finer draw-level options for TU_SYNCHACK
+  rpb   - only draws right after a barrier/dependency inside the render pass
+  uav   - only draws whose graphics shaders use SSBO/image (UAV) instructions
+  prog  - only draws where the shader program changed
+Wait-kind modifiers (combine with any of the above; default = all three):
+  wfi   - WAIT_FOR_IDLE only
+  wfm   - CP_WAIT_FOR_ME only
+  wmw   - CP_WAIT_MEM_WRITES only
+Example: TU_SYNCHACK=draw,idraw,wfi %command%
+
+r5: split "uav"
+  uavfs   - only draws whose fragment shader uses UAV
+  uavvs   - only draws whose VS/TCS/TES/GS uses UAV
+  uavnext - the draw right after a UAV draw (tests "wait after" instead of "before")
+
+r7: built-in fix, no launch option needed.
+On A8xx, WAIT_FOR_IDLE before any draw whose shaders (any graphics stage)
+use SSBO/image (UAV) instructions.
+  TU_UAV_WFI=vs   -> only VS/TCS/TES/GS (r6 behaviour)
+  TU_UAV_WFI=off  -> disabled
+
+r8: KGSL context diagnostics (default unchanged)
+  TU_KGSL_PREEMPT=ring   coarse (ringbuffer-level) preemption
+  TU_KGSL_PREEMPT=fine   fine-grain preemption
+  TU_KGSL_CTX_TYPE=vk    tag the GPU context as Vulkan (like the vendor driver)
+  TU_KGSL_CTX_FLAGS=0x.. OR raw KGSL_CONTEXT_* flags
+
+r9: TU_HANGLOG=1 hang logger (off by default, same behaviour as r8 otherwise)
+  - every draw/dispatch gets an id; the GPU command processor writes the id
+    of the draw it reached into memory (CP_MEM_WRITE)
+  - a watchdog thread checks every 250 ms whether submitted work is retiring;
+    after 2 s without progress it logs (stderr, "TU_HANGLOG:" lines):
+      retired/submitted timestamps, the draw the CP reached and the 3 before it
+      (kind, command buffer, render pass, index, UAV stages, VS/FS/CS hashes),
+      and the kernel fault count / fault report for the context
+  - when work resumes it logs "RESUMED after N s" plus fault info again
+  - contexts are created with KGSL_CONTEXT_FAULT_INFO (falls back if rejected)
+
+r10:
+  TU_HANGLOG_DUMP=761a13dc,579a6fc8   print native disassembly of shaders whose
+                                      blake3 starts with these prefixes (stderr)
+  TU_HANGWAIT=761a13dc                WAIT_FOR_IDLE+WAIT_FOR_ME before draws whose
+                                      VS or FS blake3 starts with the prefix
+  TU_SYNCHACK=first                   full wait before the first draw of every
+                                      command buffer
+
+r11: TU_HANGLOG entries also log vertex/index count, instance count,
+     render area, color attachment count/format, depth format, samples
+     (Vk format enum numbers).
+
+r12: TU_HANGLOG_DUMP prints raw machine code as hex instead of calling the
+     in-driver disassembler (which crashed the game in r10/r11).
+
+r13: targeted GMEM (tiled) rendering instead of TU_DEBUG=gmem for everything
+  TU_GMEM_FOR=761a13dc,579a6fc8   render passes containing a draw whose VS or FS
+                                  blake3 starts with a listed prefix use GMEM
+  TU_GMEM_NODEPTH=1               render passes without depth/stencil use GMEM
+
+r14: TU_HANGLOG prints the active TU_*/IR3 env options at start and whether each
+     logged render pass was rendered SYSMEM or GMEM.
+
+r15: TU_GMEM_FOR now also applies to render passes split across command buffers
+     (dynamic rendering suspend/resume, as vkd3d-proton uses); STALLED lines show
+     how many passes were forced to GMEM; fixed bogus stall line at startup.
+
+r16: with TU_HANGLOG=1, logs every env variable starting with TU_, IR3_, FD_, MESA_,
+     FEX_, DXVK_, VKD3D_, PROTON_, WINE sync/dll vars, heap_memory_percent, tu_/vk_ driconf.
+     New: TU_GMEM_DEPTH=1 -> GMEM for render passes that have a depth/stencil attachment.
+
+r17: with TU_HANGLOG=1, any CPU thread that waits more than 2 s on a Vulkan
+     fence/semaphore is logged ("CPU WAIT tid ... waiting N s"), with the timeline
+     value it waits for and the current value, then again at 5 s, 8 s, 23 s...
+     and "finished after N s" when the wait ends.
+
+r18: TU_HANGLOG logs KGSL submit/wait errors (errno), guilty reset status and the
+     moment DEVICE LOST is reported (with the draw the GPU had reached).
+     TU_KGSL_IGNORE_FAULTS=1: on EPROTO (context faulted but recovered) or a guilty
+     reset status, keep running instead of reporting VK_ERROR_DEVICE_LOST.
+
+r19: TU_HANGLOG also marks CCU mode switches (CCU->SYSMEM / CCU->GMEM) and render
+     pass starts (RENDER-START(SYSMEM/GMEM)) on the GPU timeline, and prints the 12
+     events before the stall point.
+     TU_CCU_WFI=1: on A7xx+, clean CCU and fully drain the GPU before and after
+     reprogramming the CCU layout (sysmem <-> gmem switch).
+
+r20: TU_HANGLOG marks render-pass attachment clears in sysmem mode
+     (SYSMEM-CLEAR(2D) / SYSMEM-CLEAR(3D), with format and area); ETIMEDOUT waits
+     are no longer logged.
+     TU_SYSMEM_CLEAR_3D=1: clear sysmem attachments with the 3D engine instead of
+     the 2D blitter.
+
+r21: RENDER-START entries describe the pass (draw count, area, colour/depth format,
+     samples; inst=0x.. holds clear(1)/load(2)/store(4) bits per attachment, 4 bits each).
+     TU_GMEM_EMPTY=1: GMEM for render passes that contain no draws.
+
+r22: TU_GMEM_MERGED=1 forces GMEM only for split (suspend/resume) dynamic rendering
+passes, i.e. the passes recorded across several command buffers / VkCmdBeginRendering
+calls and merged by the driver. All other passes keep autotune/sysmem.
+
+r23: TU_GMEM_MERGED=1 (all split passes, same as r22) | depth (only split passes
+with a depth attachment) | nodepth. TU_MERGED_WFI=1: after a split pass rendered
+in sysmem, clean CCU color/depth + WFI (=all: after every sysmem pass).
+
+r24: TU_HANGLOG now also polls the kernel per-context fault counter every 250 ms
+(logs NEW KERNEL FAULT with the faulting submit and its command buffers), records
+which command buffers went into every kgsl timestamp, prints the stuck submit on a
+stall, and keeps a BO alloc/free history to resolve GPU page fault addresses
+(fault report is read after the context is invalidated / device lost).
+
+r25: TU_HANGLOG also marks non-draw commands (barriers, events, copies, blits,
+clears, queries, timestamps) and command buffer begin/end.
+
+r26: hanglog events carry wall-clock time (t=epoch ms, same clock as DroidDeck
+events.jsonl) and a heartbeat line every 10 s.
+
+r27: hanglog tracks query reset/end/timestamp per query; on a stall inside
+vkCmdCopyQueryPoolResults it prints which queries are still unavailable and
+where they were last written/reset. TU_QUERY_NOWAIT=1 ignores
+VK_QUERY_RESULT_WAIT_BIT on the GPU (workaround: no infinite wait).
+
+r28: experiments for split (suspend/resume) passes in sysmem:
+  TU_MERGED_NOAT=1  render them in sysmem without autotune instrumentation
+  TU_MERGED_PRE=1   full cache clean/invalidate + WFI + CCU re-program before them
+
+r29: TU_UAV_WFI is now off by default (it did not prevent the faults and costs
+performance). TU_UAV_WFI=all|vs re-enables it.
+
+r30: TU_MARKER_INRP=memwrite|top: bottom-of-pipe vkCmdWriteBufferMarker2AMD
+inside a render pass uses WFI+CP_MEM_WRITE (memwrite) or a plain CP_MEM_WRITE
+(top) instead of an RB_DONE_TS event.
+
+r31: TU_GMEM_MERGED=<features> (split passes) and TU_GMEM_FEAT=<features> (any pass)
+force GMEM for passes containing any listed feature:
+vsuav,fsuav,marker,indirect,query,timestamp,barrier,depthwrite,blend,many,msaa
+
+r32: TU_HANGLOG prints per-minute statistics of render passes by content
+(passstat lines: split/plain, sysmem/gmem, feature set, count).
+
+r33: TU_SYSMEM_REST=1 renders every pass not forced to GMEM by a TU_GMEM_*
+option in sysmem (autotune bypassed), for clean bisection.
+
+r34: feature lists accept AND groups: TU_GMEM_MERGED=vsuav+fsuav means passes
+containing both. Comma still means OR.
+
+r35: on a kernel fault, TU_HANGLOG prints an IBMAP of the faulting submit (IB chunk
+base + offset of every marked command), to match kgsl "ib1/ib2 base/rem" lines.
+
+r36: IBMAP lines include draw parameters (indexed, first, max index count, vertex
+offset, index size, topology, restart); INDEX OOB warnings for indexed draws
+reading past the bound index buffer.
+
+r37: experiments for RBBM GPC errors in sysmem:
+  TU_SYSMEM_VPC_GMEM=1  use the GMEM VPC attr/pos buffer layout in sysmem too
+  TU_PREAMBLE_NOVPC=1|bv  do not program the VPC layout from the bin preambles
+
+r38: logs the GMEM cache layout at startup (TU_GMEMCFG lines);
+TU_SYSMEM_VPC_SMALL=1 uses GMEM-mode VPC buffer sizes in sysmem.
+TU_SYSMEM_LRZFB=late|none: LRZ feedback mask used in sysmem passes.
+TU_SYSMEM_RESTORE=1|cond: on switch-back to this context, re-program the sysmem
+CCU + VPC buffer layout (1 = always, cond = only in sysmem render mode).
+
+r39: TU_HANGLOG=lite keeps the kernel fault polling / env dump / pass stats but
+emits no GPU markers (no per-draw overhead).
+
+r40: TU_SYNCHACK categories by state change before a draw:
+vbo,desc,const,vsp,vs,fs,ds,dyn,ib,clean (comma list, OR).
+
+r41: TU_DRAW_PAD=memwrite|nop|wmw|wfm emits one extra CP packet before every draw.
+
+r42: TU_WFM_AFTER=<kinds> emits CP_WAIT_FOR_ME before the first draw after the
+listed commands (marker,qcopy,qend,timestamp,update,fill,copybuf,barrier,...).
+
+r43
+- FD_DEV_FEATURES is now part of the pipeline cache UUID, so changing it
+  (e.g. FD_DEV_FEATURES=has_fs_tex_prefetch=0) recompiles shaders instead of
+  reusing cached binaries. Test: A830 FS texture prefetch off (A810 and
+  a8xx gen2 already have it off; upstream comment says a830 may need it too).
+
+r44
+- TU_MAGIC=<reg>=<val>[,...] (hex) overrides raw magic registers written at
+  context init. A8XX PC_MODE_CNTL is 0x9b00 (default 0x00003f00),
+  PC_UNKNOWN_980B is 0x980b (default 0x00800280). Log shows
+  "TU_MAGIC: applied reg ..." when it takes effect.
+
+r45
+- A8XX hang fixes from MaxsTechReview's WinNative series (via Banners-Turnip):
+  * ir3: sanitize cube map directions (NaN / zero vector) on A8XX
+  * tu: invalidate bindless descriptors with SP_{GFX,CS}_BINDLESS_INVALIDATE
+    on A8XX (SP_UPDATE_CNTL has no bindless bits there, so descriptor set
+    changes left stale bindless descriptors cached)
+  * tu/kgsl: fetch IBs through a virtual BO alias, unbound before freeing
+- Disable individually for testing: TU_A8XX_NOFIX=bindless,alias and
+  FD_DEV_FEATURES=cube_coord_hang_quirk=0
+
+r46
+- TU_SAFEMODE=1 (3000 ms) or TU_SAFEMODE=<ms>: when the kernel reports a new
+  GPU fault on the context, run in safe mode for that long: at most one
+  submission in flight, GMEM for draw passes (overrides TU_DEBUG=sysmem),
+  CP_WAIT_FOR_ME before every draw. Keeps fault bursts below KGSL's
+  "3 faults in 2 s" limit. Log line: "TU_SAFEMODE: kernel GPU fault #N ...".
+
+r47
+- TU_KGSL_FREQ=<MHz> or <min>-<max>: KGSL DCVS profile (min/max GPU clock)
+  for this process; one value pins the clock. Logs "TU_KGSL_FREQ: ... -> ok".
+- TU_KGSL_PWR=max|min|<2..100>: per-context KGSL power constraint applied to
+  every submission. Logs "TU_KGSL_PWR: ... -> ok".
+- TU_SAFEMODE now also turns on TU_QUERY_NOWAIT.
+
+r48
+- TU_SAFEMODE escalates: a fault during safe mode or within 5 s after it
+  ended doubles the safe window (up to 60 s); a fault after a quiet period
+  resets it to the base value.
+
+r49
+- TU_SAFEMODE level 2: once the safe window has escalated to 4x the base
+  (faults keep coming even in safe mode), every draw also gets
+  CP_WAIT_MEM_WRITES + WFI (like TU_DEBUG=syncdraw) until the window ends.
+
+r50
+- TU_CTX_RECOVER=1: when KGSL invalidates the GPU context ("gpu fault
+  threshold exceeded"), create a new context and continue instead of
+  reporting VK_ERROR_DEVICE_LOST. Work from the dead context is treated as
+  signaled (expect a visible glitch). Log: "TU_CTX_RECOVER: ctx A
+  invalidated -> new ctx B ...". Implies TU_KGSL_IGNORE_FAULTS.
+- TU_HANGLOG (incl. lite): fault reports now show, per submission, how many
+  draws had an FS that writes depth, exports stencil, or discards.
+
+r51
+- TU_CTX_RECOVER: invalidated contexts are now destroyed. r50 leaked them
+  and after ~200 recoveries KGSL ran out of context slots ("creating a new
+  context failed (No space left on device)") -> DEVICE_LOST. If creating a
+  context still fails, the dead one is freed first and creation retried.
+
+r52
+- TU_SAFEMODE is now one switch for the whole mitigation set. TU_SAFEMODE=1
+  also turns on (unless you set them yourself):
+    TU_CTX_RECOVER=1  TU_GMEM_MERGED=1  TU_KGSL_PREEMPT=ring
+    TU_HANGLOG=lite   TU_QUERY_NOWAIT=1
+  Adjust with comma tokens, e.g.
+    TU_SAFEMODE=1                         all on, 3000 ms window
+    TU_SAFEMODE=5000                      all on, 5000 ms window
+    TU_SAFEMODE=1,norecover               without context recovery
+    TU_SAFEMODE=1,nomerged,preempt=fine   ...
+  Tokens: <ms> | ms=<n>, recover/norecover, merged[=<spec>]/nomerged,
+  preempt=ring|fine|none/nopreempt, hanglog[=lite|1]/nohanglog,
+  nowait/nonowait. An explicitly set variable (e.g. TU_CTX_RECOVER=0)
+  always wins. The resolved set is logged as
+  "TU_SAFEMODE: window N ms | TU_CTX_RECOVER=... ".
+  sysmem vs GMEM stays on DroidDeck's "Turnip: sysmem" toggle (TU_DEBUG).
+
+r53
+- TU_HANGLOG (incl. lite, so TU_SAFEMODE=1) adds a line every 10 s:
+    TU_HANGLOG: t=... mem gpu 1834 MB (5120 bos) | rss 5210 MB swap 900 MB |
+      system avail 1200 MB swapfree 6000 MB | safe mode 35% of 1420 submits
+  gpu   = memory the driver allocated for the game (non-shareable BOs)
+  rss/swap = the game process, system = whole device.
+  "safe mode N%" = share of submissions in the last 10 s made in safe mode.
+
+r54
+- TU_HEAP_MB=<n> (experiment): report an n MB Vulkan memory heap and
+  budget instead of most of system RAM, so vkd3d-proton / the game see a
+  smaller budget and may stream less. Advisory only: allocations past it
+  are not refused (no new out-of-memory errors). Logged as
+  "TU_HEAP_MB: reporting a N MB memory heap".

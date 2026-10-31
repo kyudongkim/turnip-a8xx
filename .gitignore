@@ -7,3 +7,7 @@
 /build
 .venv/
 *.mda.tar
+
+# turnip-a8xx build outputs
+/build-a8xx/
+/out/
