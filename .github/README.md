@@ -14,7 +14,8 @@ Mesa Turnip (Vulkan) for **Adreno 8xx on KGSL** with mitigations for the A8xx
 ## Quick start
 
 1. Download `Turnip-…-a8xx-r<N>.zip` from [Releases](../../releases)
-   (newest release = recommended).
+   (newest release = recommended). Not "Source code (zip)": that is the
+   whole Mesa source, added by GitHub to every release.
 2. Import it as the Linux (glibc) Vulkan driver in DroidDeck.
 3. Set the environment variable:
 
@@ -92,7 +93,7 @@ Adreno 8xx(KGSL)용 Mesa Turnip 드라이버예요. A8xx에서 생기는 **"RBBM
 
 ### 사용법
 
-1. [Releases](../../releases)에서 최신 zip을 받아요.
+1. [Releases](../../releases)에서 최신 `Turnip-…-a8xx-rNN.zip`을 받아요. GitHub이 자동으로 붙이는 "Source code (zip)"은 Mesa 소스 전체라서 드라이버가 아니에요.
 2. DroidDeck에서 Linux(glibc) Vulkan 드라이버로 가져와요.
 3. 환경변수에 `TU_SAFEMODE=1` 하나만 넣어요. 안전 모드, 컨텍스트 복구, GMEM_MERGED, ring 선점, 쿼리 대기 방지, 로그가 한 번에 켜져요.
 4. DroidDeck의 **"Turnip: sysmem"** 토글은 켠 상태를 추천해요.
