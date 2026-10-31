@@ -28,15 +28,21 @@ jobs:
         run: |
           git config user.name github-actions
           git config user.email github-actions@users.noreply.github.com
-          grep -v '^#' a8xx/tags.txt | while read -r tag sha; do
-            if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-              echo "$tag exists"
-            else
-              git tag "$tag" "$sha"
-              echo "$tag -> $sha"
+          fail=0
+          while read -r tag sha; do
+            [[ -z "$tag" || "$tag" == \#* ]] && continue
+            if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+              echo "$tag exists"; continue
             fi
-          done
-          git push origin --tags
+            git tag -f "$tag" "$sha" >/dev/null
+            if out=$(git push origin "refs/tags/$tag" 2>&1); then
+              echo "$tag -> $sha"
+            else
+              fail=1
+              echo "::error title=tag $tag::$(echo "$out" | tail -5 | sed -e ':a;N;$!ba;s/\n/%0A/g')"
+            fi
+          done < a8xx/tags.txt
+          exit $fail
       - name: Release list
         id: list
         run: |
