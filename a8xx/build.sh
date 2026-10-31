@@ -36,8 +36,19 @@ EOF
       libxcb1-dev:arm64 libxcb-dri3-dev:arm64 libxcb-present-dev:arm64 \
       libxcb-randr0-dev:arm64 libxcb-shm0-dev:arm64 libxcb-sync-dev:arm64 \
       libxcb-xfixes0-dev:arm64 libxrandr-dev:arm64 libxshmfence-dev:arm64
+   sudo apt-get install -y --no-install-recommends git libexpat1-dev
    pip3 install --user --break-system-packages 'meson>=1.4.0'
    export PATH="$HOME/.local/bin:$PATH"
+   # Mesa's wayland-protocols fallback needs a build-machine wayland-scanner
+   # >= 1.23; Ubuntu 24.04 ships 1.22, so build just the scanner.
+   if ! pkg-config --atleast-version=1.23 wayland-scanner; then
+      rm -rf /tmp/wayland-src
+      git clone -q --depth 1 -b 1.23.1 https://gitlab.freedesktop.org/wayland/wayland.git /tmp/wayland-src
+      meson setup /tmp/wayland-src/build /tmp/wayland-src --prefix=/usr/local \
+         -Dlibraries=false -Ddocumentation=false -Ddtd_validation=false -Dtests=false
+      ninja -C /tmp/wayland-src/build
+      sudo env "PATH=$PATH" meson install -C /tmp/wayland-src/build
+   fi
 fi
 
 NAME="${1:-$(git describe --tags --always 2>/dev/null || echo dev)}"
