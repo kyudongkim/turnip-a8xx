@@ -39,16 +39,25 @@ EOF
    sudo apt-get install -y --no-install-recommends git libexpat1-dev
    pip3 install --user --break-system-packages 'meson>=1.4.0'
    export PATH="$HOME/.local/bin:$PATH"
-   # Mesa's wayland-protocols fallback needs a build-machine wayland-scanner
-   # >= 1.23; Ubuntu 24.04 ships 1.22, so build just the scanner.
-   if ! pkg-config --atleast-version=1.23 wayland-scanner; then
-      rm -rf /tmp/wayland-src
-      git clone -q --depth 1 -b 1.23.1 https://gitlab.freedesktop.org/wayland/wayland.git /tmp/wayland-src
-      meson setup /tmp/wayland-src/build /tmp/wayland-src --prefix=/usr/local \
-         -Dlibraries=false -Ddocumentation=false -Ddtd_validation=false -Dtests=false
-      ninja -C /tmp/wayland-src/build
-      DESTDIR=/tmp/wayland-inst meson install -C /tmp/wayland-src/build
-      sudo cp -a /tmp/wayland-inst/usr/local/. /usr/local/
+   # Mesa needs a newer wayland-protocols than Ubuntu 24.04 has, and its
+   # subproject fallback wants a newer wayland-scanner than wayland-client.
+   # wayland-protocols is only XML + a .pc file: install those directly.
+   if ! pkg-config --atleast-version=1.45 wayland-protocols; then
+      rm -rf /tmp/wp-src /tmp/wp-inst
+      git clone -q --depth 1 -b 1.45 https://gitlab.freedesktop.org/wayland/wayland-protocols.git /tmp/wp-src
+      sudo mkdir -p /usr/local/share/wayland-protocols /usr/local/share/pkgconfig
+      for d in stable staging unstable experimental; do
+         [[ -d /tmp/wp-src/$d ]] && sudo cp -r /tmp/wp-src/$d /usr/local/share/wayland-protocols/
+      done
+      sudo tee /usr/local/share/pkgconfig/wayland-protocols.pc >/dev/null <<'PC'
+prefix=/usr/local
+datarootdir=${prefix}/share
+pkgdatadir=${datarootdir}/wayland-protocols
+
+Name: Wayland Protocols
+Description: Wayland protocol files
+Version: 1.45
+PC
    fi
 fi
 

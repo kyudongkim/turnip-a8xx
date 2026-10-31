@@ -9,7 +9,7 @@ strip = 'aarch64-linux-gnu-strip'
 pkg-config = 'pkg-config'
 
 [properties]
-pkg_config_libdir = ['/usr/lib/aarch64-linux-gnu/pkgconfig', '/usr/share/pkgconfig']
+pkg_config_libdir = ['/usr/lib/aarch64-linux-gnu/pkgconfig', '/usr/share/pkgconfig', '/usr/local/share/pkgconfig']
 
 [host_machine]
 system = 'linux'
