@@ -43,10 +43,15 @@ jobs:
           echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
           echo "pkg=$(basename "$ZIP" .zip)" >> "$GITHUB_OUTPUT"
 
+      # GitHub always zips artifacts, so upload the unpacked folder: the
+      # downloaded <pkg>.zip then has the same layout as the release zips
+      # and can be imported into DroidDeck directly.
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.build.outputs.pkg }}
-          path: ${{ steps.build.outputs.zip }}
+          path: |
+            out/
+            !out/*.zip
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/r')
