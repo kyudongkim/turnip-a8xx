@@ -47,7 +47,8 @@ EOF
       meson setup /tmp/wayland-src/build /tmp/wayland-src --prefix=/usr/local \
          -Dlibraries=false -Ddocumentation=false -Ddtd_validation=false -Dtests=false
       ninja -C /tmp/wayland-src/build
-      sudo env "PATH=$PATH" meson install -C /tmp/wayland-src/build
+      DESTDIR=/tmp/wayland-inst meson install -C /tmp/wayland-src/build
+      sudo cp -a /tmp/wayland-inst/usr/local/. /usr/local/
    fi
 fi
 
