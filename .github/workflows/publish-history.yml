@@ -64,7 +64,12 @@ jobs:
       - name: Build
         id: build
         run: |
-          ZIP=$(a8xx/build.sh --deps "${{ matrix.tag }}" | tail -1)
+          set -o pipefail
+          if ! a8xx/build.sh --deps "${{ matrix.tag }}" > build.log 2>&1; then
+            echo "::error title=build failed::$(tail -60 build.log | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')"
+            exit 1
+          fi
+          ZIP=$(tail -1 build.log)
           echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
       - name: Publish release
         env:

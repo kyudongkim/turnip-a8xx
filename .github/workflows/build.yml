@@ -31,7 +31,12 @@ jobs:
         run: |
           NAME="${{ inputs.name }}"
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then NAME="${GITHUB_REF_NAME}"; fi
-          ZIP=$(a8xx/build.sh --deps ${NAME} | tail -1)
+          set -o pipefail
+          if ! a8xx/build.sh --deps ${NAME} > build.log 2>&1; then
+            echo "::error title=build failed::$(tail -60 build.log | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')"
+            exit 1
+          fi
+          ZIP=$(tail -1 build.log)
           echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
           echo "pkg=$(basename "$ZIP" .zip)" >> "$GITHUB_OUTPUT"
 
