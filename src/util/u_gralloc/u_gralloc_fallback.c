@@ -148,8 +148,14 @@ fallback_gralloc_get_buffer_info(struct u_gralloc *gralloc,
    out->strides[0] = stride;
 
 #ifdef HAS_FREEDRENO
-   uint32_t gmsm = ('g' << 24) | ('m' << 16) | ('s' << 8) | 'm';
-   if (hnd->handle->numInts >= 2 && hnd->handle->data[hnd->handle->numFds] == gmsm) {
+   /* Older Qualcomm gralloc handles start their ints with a 'gmsm' magic.
+    * Newer ones (e.g. the IMapper5 gralloc on Snapdragon 8 Elite) no longer
+    * do, so the check never matched, the buffer got no modifier, and UBWC
+    * buffers were read as linear: a completely garbled picture. Use the
+    * UBWC flag whenever the handle has the ints. Same approach as the
+    * "u_gralloc: always use ubwc detection path" hack by whitebelyash.
+    */
+   if (hnd->handle->numInts >= 2) {
       /* This UBWC flag was introduced in a5xx. */
       bool ubwc = hnd->handle->data[hnd->handle->numFds + 1] & 0x08000000;
       out->modifier = ubwc ? DRM_FORMAT_MOD_QCOM_COMPRESSED : DRM_FORMAT_MOD_LINEAR;
