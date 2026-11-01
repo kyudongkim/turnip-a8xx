@@ -291,3 +291,11 @@ r54
   smaller budget and may stream less. Advisory only: allocations past it
   are not refused (no new out-of-memory errors). Logged as
   "TU_HEAP_MB: reporting a N MB memory heap".
+
+r55
+- Releases now carry two packages:
+    *-linux.zip        DroidDeck (glibc Linux on Android)
+    *-adrenotools.zip  GameHub, GameNative (AdrenoTools, Android/bionic build)
+- On Android builds the TU_SAFEMODE mitigation set is on by default, since
+  those apps often cannot set environment variables. TU_SAFEMODE=0 turns it
+  off. Linux builds are unchanged (set TU_SAFEMODE=1).

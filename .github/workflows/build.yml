@@ -1,9 +1,12 @@
 name: build
 
-# Builds the aarch64 Linux (glibc) Turnip driver.
-#  - every push to main / pull request: build and keep the zip as a workflow artifact
-#  - a pushed tag r<N> (e.g. r55), or a release r<N> published from the web UI:
-#    build and attach the zip to that release
+# Builds the driver in two flavours:
+#   linux    aarch64 glibc Linux  -> DroidDeck
+#   android  Android/bionic, AdrenoTools package -> GameHub, GameNative
+# Triggers:
+#  - every push to main / pull request: build and keep the packages as artifacts
+#  - a pushed tag r<N>, or a release r<N> published from the web UI:
+#    build and attach both zips to that release (notes are filled in when empty)
 #  - manual run from the Actions tab: build with an optional name
 on:
   push:
@@ -24,6 +27,10 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux, android]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,23 +42,28 @@ jobs:
           NAME="${{ inputs.name }}"
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then NAME="${GITHUB_REF_NAME}"; fi
           set -o pipefail
-          if ! a8xx/build.sh --deps ${NAME} > build.log 2>&1; then
+          if ! a8xx/build.sh --deps --target ${{ matrix.target }} ${NAME} > build.log 2>&1; then
             echo "::error title=build failed::$(tail -60 build.log | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')"
             exit 1
           fi
           ZIP=$(tail -1 build.log)
+          PKG=$(basename "$ZIP" .zip)
           echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
-          echo "pkg=$(basename "$ZIP" .zip)" >> "$GITHUB_OUTPUT"
+          echo "pkg=$PKG" >> "$GITHUB_OUTPUT"
+          # GitHub always zips artifacts, so upload unpacked files: the
+          # downloaded artifact then has the same layout as the release zip.
+          # linux: keep the top-level folder; android: files at the top level.
+          mkdir -p artifact
+          if [[ "${{ matrix.target }}" == linux ]]; then
+            cp -r "out/$PKG" artifact/
+          else
+            cp -r "out/$PKG"/. artifact/
+          fi
 
-      # GitHub always zips artifacts, so upload the unpacked folder: the
-      # downloaded <pkg>.zip then has the same layout as the release zips
-      # and can be imported into DroidDeck directly.
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.build.outputs.pkg }}
-          path: |
-            out/
-            !out/*.zip
+          path: artifact/
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/r')
@@ -59,15 +71,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${GITHUB_REF_NAME}"
-          # Release notes: the matching "rN" section of a8xx/BUILD-NOTES.txt.
-          awk -v t="$TAG" '
-            $0 ~ "^"t"([: ]|$)" {p=1; print; next}
-            p && /^r[0-9]+([: ]|$)/ {exit}
-            p {print}' a8xx/BUILD-NOTES.txt > notes.md
-          [[ -s notes.md ]] || echo "Build of ${TAG}." > notes.md
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "${{ steps.build.outputs.zip }}" --clobber
+          a8xx/release-notes.sh "$TAG" > notes.md
+          ZIP="${{ steps.build.outputs.zip }}"
+          # Both matrix jobs may race to create the release.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" "$ZIP" --title "$TAG" --notes-file notes.md --verify-tag ||
+              gh release upload "$TAG" "$ZIP" --clobber
           else
-            gh release create "$TAG" "${{ steps.build.outputs.zip }}" \
-              --title "$TAG" --notes-file notes.md
+            gh release upload "$TAG" "$ZIP" --clobber
+            if [[ -z "$(gh release view "$TAG" --json body --jq .body)" ]]; then
+              gh release edit "$TAG" --notes-file notes.md
+            fi
           fi

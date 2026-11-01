@@ -1,8 +1,12 @@
 # turnip-a8xx
 
 Mesa Turnip (Vulkan) for **Adreno 8xx on KGSL** with mitigations for the A8xx
-**"RBBM: GPC error"** GPU faults, built for glibc Linux-on-Android setups such as
-[DroidDeck](https://github.com/Droid-Deck/DroidDeck).
+**"RBBM: GPC error"** GPU faults. Each release has two packages:
+
+| File | Use with |
+|---|---|
+| `Turnip-…-r<N>-linux.zip` | [DroidDeck](https://github.com/Droid-Deck/DroidDeck) and other glibc Linux-on-Android setups |
+| `Turnip-…-r<N>-adrenotools.zip` | GameHub, GameNative and other apps that load AdrenoTools driver packages (from r55) |
 
 > **Experimental.** Tested only on a Lenovo Legion Y700 Gen4 (Snapdragon 8 Elite,
 > Adreno 830) with Cyberpunk 2077 via DroidDeck → Proton → vkd3d-proton → FEX.
@@ -13,17 +17,18 @@ Mesa Turnip (Vulkan) for **Adreno 8xx on KGSL** with mitigations for the A8xx
 
 ## Quick start
 
-1. Download `Turnip-…-a8xx-r<N>.zip` from [Releases](../../releases)
-   (newest release = recommended). Not "Source code (zip)": that is the
-   whole Mesa source, added by GitHub to every release.
-2. Import it as the Linux (glibc) Vulkan driver in DroidDeck.
-3. Set the environment variable:
+Download from [Releases](../../releases) (newest = recommended). Not
+"Source code (zip)": that is the whole Mesa source, added by GitHub.
 
-   ```
-   TU_SAFEMODE=1
-   ```
+**DroidDeck** (`-linux.zip`)
+1. Import it as the Linux (glibc) Vulkan driver.
+2. Set the environment variable `TU_SAFEMODE=1` and keep DroidDeck's
+   **"Turnip: sysmem"** toggle on (`TU_DEBUG=sysmem`).
 
-   and keep DroidDeck's **"Turnip: sysmem"** toggle on (`TU_DEBUG=sysmem`).
+**GameHub, GameNative** (`-adrenotools.zip`, untested)
+1. Import it as a custom/AdrenoTools GPU driver.
+2. Nothing to set: on Android builds the mitigation set is on by default
+   (`TU_SAFEMODE=0` turns it off).
 
 `TU_SAFEMODE=1` turns on the whole mitigation set (see below). The resolved set
 is logged once as `TU_SAFEMODE: window 3000 ms | TU_CTX_RECOVER=1 …`.
@@ -51,12 +56,14 @@ Example: `TU_SAFEMODE=1,norecover,preempt=fine`. A variable you set explicitly
 
 ## Build
 
-Ubuntu 24.04 x86_64, cross-compiling to aarch64:
+Ubuntu 24.04 x86_64:
 
 ```sh
-a8xx/build.sh --deps r55      # installs deps (sudo), builds, writes out/Turnip-…-a8xx-r55.zip
-a8xx/build.sh r55             # later builds
+a8xx/build.sh --deps --target linux r55     # -> out/Turnip-…-a8xx-r55-linux.zip
+a8xx/build.sh --deps --target android r55   # -> out/Turnip-…-a8xx-r55-adrenotools.zip (downloads NDK r29)
 ```
+
+`--deps` installs dependencies (sudo); drop it for later builds.
 
 GitHub Actions (`.github/workflows/build.yml`) builds every push; pushing a tag
 `r<N>` publishes a release with the zip.
@@ -93,10 +100,16 @@ Adreno 8xx(KGSL)용 Mesa Turnip 드라이버예요. A8xx에서 생기는 **"RBBM
 
 ### 사용법
 
-1. [Releases](../../releases)에서 최신 `Turnip-…-a8xx-rNN.zip`을 받아요. GitHub이 자동으로 붙이는 "Source code (zip)"은 Mesa 소스 전체라서 드라이버가 아니에요.
-2. DroidDeck에서 Linux(glibc) Vulkan 드라이버로 가져와요.
-3. 환경변수에 `TU_SAFEMODE=1` 하나만 넣어요. 안전 모드, 컨텍스트 복구, GMEM_MERGED, ring 선점, 쿼리 대기 방지, 로그가 한 번에 켜져요.
-4. DroidDeck의 **"Turnip: sysmem"** 토글은 켠 상태를 추천해요.
+[Releases](../../releases)에서 최신 버전을 받아요. GitHub이 자동으로 붙이는 "Source code (zip)"은 Mesa 소스 전체라서 드라이버가 아니에요.
+
+**DroidDeck: `…-linux.zip`**
+1. Linux(glibc) Vulkan 드라이버로 가져와요.
+2. 환경변수에 `TU_SAFEMODE=1` 하나만 넣어요. 안전 모드, 컨텍스트 복구, GMEM_MERGED, ring 선점, 쿼리 대기 방지, 로그가 한 번에 켜져요.
+3. **"Turnip: sysmem"** 토글은 켠 상태를 추천해요.
+
+**GameHub, GameNative: `…-adrenotools.zip` (아직 검증 전)**
+1. 사용자 지정(AdrenoTools) GPU 드라이버로 가져와요.
+2. 따로 설정할 건 없어요. 안드로이드 빌드는 완화 기능이 기본으로 켜져 있어요. 끄려면 `TU_SAFEMODE=0`을 넣어요.
 
 ### 원인 추적에서 배제된 것
 
