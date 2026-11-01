@@ -17,7 +17,7 @@ Mesa Turnip (Vulkan) for **Adreno 8xx on KGSL** with mitigations for the A8xx
 
 ## Quick start
 
-Download from [Releases](../../releases) (newest = recommended). Not
+Download from [Releases](https://github.com/kyudongkim/turnip-a8xx/releases) (newest = recommended). Not
 "Source code (zip)": that is the whole Mesa source, added by GitHub.
 
 **DroidDeck** (`-linux.zip`)
@@ -72,7 +72,7 @@ GitHub Actions (`.github/workflows/build.yml`) builds every push; pushing a tag
 
 - Base: Mesa `main` snapshot of 2026-10-24 (`27.0.0-devel`), single commit "base".
 - Every later commit is one step of the investigation; the commit messages explain why.
-- [`a8xx/tags.txt`](../a8xx/tags.txt) maps `r7`…`r54` to the exact commit each
+- [`a8xx/tags.txt`](https://github.com/kyudongkim/turnip-a8xx/blob/main/a8xx/tags.txt) maps `r7`…`r54` to the exact commit each
   historical zip was built from (r2–r6 predate the history). The
   **publish-history** workflow (Actions tab → Run workflow) creates those tags
   and rebuilds the chosen ones as releases (`all` for every one). Creating
@@ -80,7 +80,7 @@ GitHub Actions (`.github/workflows/build.yml`) builds every push; pushing a tag
   `TAG_TOKEN` (fine-grained, this repository only, permissions
   *Contents: Read and write* and *Workflows: Read and write*), because the old
   commits still carry upstream Mesa's workflow files.
-- Per-build notes: [`a8xx/BUILD-NOTES.txt`](../a8xx/BUILD-NOTES.txt).
+- Per-build notes: [`a8xx/BUILD-NOTES.txt`](https://github.com/kyudongkim/turnip-a8xx/blob/main/a8xx/BUILD-NOTES.txt).
 
 ## License
 
@@ -100,7 +100,7 @@ Adreno 8xx(KGSL)용 Mesa Turnip 드라이버예요. A8xx에서 생기는 **"RBBM
 
 ### 사용법
 
-[Releases](../../releases)에서 최신 버전을 받아요. GitHub이 자동으로 붙이는 "Source code (zip)"은 Mesa 소스 전체라서 드라이버가 아니에요.
+[Releases](https://github.com/kyudongkim/turnip-a8xx/releases)에서 최신 버전을 받아요. GitHub이 자동으로 붙이는 "Source code (zip)"은 Mesa 소스 전체라서 드라이버가 아니에요.
 
 **DroidDeck: `…-linux.zip`**
 1. Linux(glibc) Vulkan 드라이버로 가져와요.
