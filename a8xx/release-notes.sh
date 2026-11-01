@@ -28,7 +28,7 @@ cat <<EOF
 
 | File | Use with |
 |---|---|
-| \`Turnip-…-${TAG}-linux.zip\` | **DroidDeck** (glibc Linux on Android): import it as the Linux Vulkan driver. ${LINUX_SET} |
+| \`Turnip-…-${TAG}-linux.zip\` | **DroidDeck** (glibc Linux on Android): import it as the Linux GPU runtime driver. ${LINUX_SET} |
 | \`Turnip-…-${TAG}-adrenotools.zip\` | **GameHub, GameNative** and other apps that load AdrenoTools driver packages. ${ANDROID_SET} |
 
 "Source code (zip / tar.gz)" is the Mesa source added by GitHub, not a driver.
@@ -38,7 +38,7 @@ Verified only on Adreno 830 (Lenovo Legion Y700 Gen4) with DroidDeck; the Adreno
 
 | 파일 | 쓰는 곳 |
 |---|---|
-| \`…-linux.zip\` | **DroidDeck**: Linux Vulkan 드라이버로 가져오세요. ${LINUX_KO} |
+| \`…-linux.zip\` | **DroidDeck**: Linux GPU 런타임 드라이버로 가져오세요. ${LINUX_KO} |
 | \`…-adrenotools.zip\` | **GameHub, GameNative**: AdrenoTools 드라이버로 가져오세요. ${ANDROID_KO} |
 
 "Source code"는 Mesa 소스라서 드라이버가 아니에요. Adreno 830(Legion Y700 4세대)과 DroidDeck에서만 검증했고, AdrenoTools 패키지는 아직 검증 전이에요.

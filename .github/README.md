@@ -21,7 +21,7 @@ Download from [Releases](https://github.com/kyudongkim/turnip-a8xx/releases) (ne
 "Source code (zip)": that is the whole Mesa source, added by GitHub.
 
 **DroidDeck** (`-linux.zip`)
-1. Import it as the Linux (glibc) Vulkan driver.
+1. Import it as the Linux (glibc) GPU runtime driver.
 2. Set the environment variable `TU_SAFEMODE=1` and keep DroidDeck's
    **"Turnip: sysmem"** toggle on (`TU_DEBUG=sysmem`).
 
@@ -103,7 +103,7 @@ Adreno 8xx(KGSL)용 Mesa Turnip 드라이버예요. A8xx에서 생기는 **"RBBM
 [Releases](https://github.com/kyudongkim/turnip-a8xx/releases)에서 최신 버전을 받아요. GitHub이 자동으로 붙이는 "Source code (zip)"은 Mesa 소스 전체라서 드라이버가 아니에요.
 
 **DroidDeck: `…-linux.zip`**
-1. Linux(glibc) Vulkan 드라이버로 가져와요.
+1. Linux(glibc) GPU 런타임 드라이버로 가져와요.
 2. 환경변수에 `TU_SAFEMODE=1` 하나만 넣어요. 안전 모드, 컨텍스트 복구, GMEM_MERGED, ring 선점, 쿼리 대기 방지, 로그가 한 번에 켜져요.
 3. **"Turnip: sysmem"** 토글은 켠 상태를 추천해요.
 
