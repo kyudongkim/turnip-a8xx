@@ -107,4 +107,8 @@ jobs:
               --verify-tag --latest=$LATEST || gh release upload "$TAG" "$ZIP" --clobber
           else
             gh release upload "$TAG" "$ZIP" --clobber
+            # Refresh notes and drop the single zip of earlier runs, which
+            # is now replaced by the -linux / -adrenotools pair.
+            gh release edit "$TAG" --notes-file notes.md
+            gh release delete-asset "$TAG" "Turnip-$(cat VERSION)-a8xx-${TAG}.zip" -y 2>/dev/null || true
           fi
