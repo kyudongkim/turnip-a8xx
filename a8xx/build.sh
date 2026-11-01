@@ -23,13 +23,13 @@ ROOT=$PWD
 
 DEPS=0
 TARGET=linux
-NAME=
+REL_NAME=
 while [[ $# -gt 0 ]]; do
    case "$1" in
    --deps) DEPS=1 ;;
    --target) TARGET="$2"; shift ;;
    --target=*) TARGET="${1#--target=}" ;;
-   *) NAME="$1" ;;
+   *) REL_NAME="$1" ;;
    esac
    shift
 done
@@ -108,7 +108,8 @@ if [[ $DEPS == 1 ]]; then
 fi
 export PATH="$HOME/.local/bin:$PATH"
 
-NAME="${NAME:-$(git describe --tags --always 2>/dev/null || echo dev)}"
+# (not NAME: sourcing /etc/os-release above sets NAME=Ubuntu)
+NAME="${REL_NAME:-$(git describe --tags --always 2>/dev/null || echo dev)}"
 VERSION="$(cat VERSION)"
 
 build_linux() {
