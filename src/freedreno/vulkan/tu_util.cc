@@ -5,6 +5,7 @@
 
 #include "tu_util.h"
 #include "util/os_time.h"
+#include "util/detect_os.h"
 
 #include <errno.h>
 #include <stdarg.h>
@@ -251,7 +252,15 @@ static const struct debug_control tu_synchack_options[] = {
 static void
 tu_safemode_preset(void)
 {
-   const char *v = getenv("TU_SAFEMODE");
+   const char *v = os_get_option("TU_SAFEMODE");
+#if DETECT_OS_ANDROID
+   /* Android apps (AdrenoTools packages in GameHub, GameNative, ...) often
+    * cannot set environment variables, so the mitigation set is on by
+    * default there. TU_SAFEMODE=0 turns it off.
+    */
+   if (!v || !*v)
+      v = "1";
+#endif
    if (!v || !*v || !strcmp(v, "0") || !strcmp(v, "false") || !strcmp(v, "off"))
       return;
 
