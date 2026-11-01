@@ -5,16 +5,15 @@ name: build
 #   android  Android/bionic, AdrenoTools package -> GameHub, GameNative
 # Triggers:
 #  - every push to main / pull request: build and keep the packages as artifacts
-#  - a pushed tag r<N>, or a release r<N> published from the web UI:
-#    build and attach both zips to that release (notes are filled in when empty)
+#  - a tag r<N> (pushed, or created by publishing a release from the web UI;
+#    both raise the same tag push event): build and attach both zips to the
+#    release, creating it or filling in empty notes
 #  - manual run from the Actions tab: build with an optional name
 on:
   push:
     branches: [main]
     tags: ['r*']
   pull_request:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       name:
